@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { authMiddleware } from '../middleware/auth.middleware';
+import { validate } from '../middleware/validate.middleware';
+import { registerSchema, loginSchema, changePasswordSchema, recoverSchema, refreshSchema } from '../schemas/auth.schemas';
 import {
   registerHandler,
   loginHandler,
@@ -15,14 +17,14 @@ import {
 const router = Router();
 
 // Public endpoints
-router.post('/register', registerHandler);
-router.post('/login', loginHandler);
-router.post('/refresh', refreshHandler);
-router.post('/recover', recoverHandler);
+router.post('/register', validate(registerSchema), registerHandler);
+router.post('/login', validate(loginSchema), loginHandler);
+router.post('/refresh', validate(refreshSchema), refreshHandler);
+router.post('/recover', validate(recoverSchema), recoverHandler);
 
 // Protected endpoints
 router.post('/logout', authMiddleware, logoutHandler);
-router.patch('/change-password', authMiddleware, changePasswordHandler);
+router.patch('/change-password', authMiddleware, validate(changePasswordSchema), changePasswordHandler);
 router.get('/me', authMiddleware, getMeHandler);
 router.get('/devices', authMiddleware, getDevicesHandler);
 router.delete('/devices/:id', authMiddleware, removeDeviceHandler);

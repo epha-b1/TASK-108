@@ -14,28 +14,7 @@ declare global {
   }
 }
 
-export function authMiddleware(req: Request, _res: Response, next: NextFunction): void {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith('Bearer ')) {
-    next(new AppError(401, UNAUTHORIZED, 'Authentication required'));
-    return;
-  }
-
-  const token = header.slice(7);
-  try {
-    const payload = verifyAccessToken(token);
-    req.user = payload;
-    next();
-  } catch (err) {
-    next(err);
-  }
-}
-
-export async function authMiddlewareWithDbCheck(
-  req: Request,
-  _res: Response,
-  next: NextFunction,
-): Promise<void> {
+export async function authMiddleware(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const header = req.headers.authorization;
   if (!header || !header.startsWith('Bearer ')) {
     next(new AppError(401, UNAUTHORIZED, 'Authentication required'));

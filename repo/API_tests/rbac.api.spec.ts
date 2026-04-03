@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { v4 as uuid } from 'uuid';
 import app from '../src/app';
 import { getPrisma } from '../src/config/database';
 
@@ -19,7 +20,7 @@ beforeAll(async () => {
   await prisma.$connect();
 
   // Register admin user
-  const adminReg = await request(app).post('/auth/register').send({
+  const adminReg = await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send({
     ...adminCreds,
     securityQuestions: [
       { question: 'Q1?', answer: 'a1' },
@@ -35,11 +36,11 @@ beforeAll(async () => {
   });
 
   // Login as admin
-  const adminLogin = await request(app).post('/auth/login').send(adminCreds);
+  const adminLogin = await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send(adminCreds);
   adminToken = adminLogin.body.accessToken;
 
   // Register organizer user
-  const orgReg = await request(app).post('/auth/register').send({
+  const orgReg = await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send({
     ...orgCreds,
     securityQuestions: [
       { question: 'Q1?', answer: 'a1' },
@@ -49,7 +50,7 @@ beforeAll(async () => {
   orgUserId = orgReg.body.id;
 
   // Login as organizer
-  const orgLogin = await request(app).post('/auth/login').send(orgCreds);
+  const orgLogin = await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send(orgCreds);
   orgToken = orgLogin.body.accessToken;
 });
 
@@ -82,6 +83,7 @@ describe('POST /roles', () => {
     const res = await request(app)
       .post('/roles')
       .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
       .send({ name: `testrole_${ts}`, description: 'Test role' });
     expect(res.status).toBe(201);
     expect(res.body.id).toBeDefined();
@@ -93,6 +95,7 @@ describe('POST /roles', () => {
     const res = await request(app)
       .post('/roles')
       .set('Authorization', `Bearer ${orgToken}`)
+      .set('Idempotency-Key', uuid())
       .send({ name: 'unauthorized_role', description: 'Should fail' });
     expect(res.status).toBe(403);
   });
@@ -113,6 +116,7 @@ describe('POST /permission-points', () => {
     const res = await request(app)
       .post('/permission-points')
       .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
       .send({ code: `test:perm_${ts}`, description: 'Test permission' });
     expect(res.status).toBe(201);
     expect(res.body.code).toBe(`test:perm_${ts}`);
@@ -123,6 +127,7 @@ describe('POST /permission-points', () => {
     const res = await request(app)
       .post('/permission-points')
       .set('Authorization', `Bearer ${orgToken}`)
+      .set('Idempotency-Key', uuid())
       .send({ code: 'unauth:perm', description: 'Should fail' });
     expect(res.status).toBe(403);
   });
@@ -133,6 +138,7 @@ describe('POST /roles/:id/permissions', () => {
     const res = await request(app)
       .post(`/roles/${roleId}/permissions`)
       .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
       .send({ permissionPointIds: [ppId] });
     expect(res.status).toBe(200);
     expect(res.body.rolePermissionPoints).toBeDefined();
@@ -145,6 +151,7 @@ describe('POST /users/:id/roles', () => {
     const res = await request(app)
       .post(`/users/${orgUserId}/roles`)
       .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
       .send({ roleIds: [roleId] });
     expect(res.status).toBe(200);
     expect(res.body.userRoles).toBeDefined();
@@ -155,6 +162,7 @@ describe('POST /users/:id/roles', () => {
     const res = await request(app)
       .post(`/users/${orgUserId}/roles`)
       .set('Authorization', `Bearer ${orgToken}`)
+      .set('Idempotency-Key', uuid())
       .send({ roleIds: [roleId] });
     expect(res.status).toBe(403);
   });
@@ -215,6 +223,7 @@ describe('POST /menus', () => {
     const res = await request(app)
       .post('/menus')
       .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
       .send({
         name: `testmenu_${ts}`,
         description: 'Test menu',

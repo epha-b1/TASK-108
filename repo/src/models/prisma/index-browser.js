@@ -176,6 +176,14 @@ exports.Prisma.PasswordHistoryScalarFieldEnum = {
   createdAt: 'createdAt'
 };
 
+exports.Prisma.LoginAttemptScalarFieldEnum = {
+  id: 'id',
+  userId: 'userId',
+  success: 'success',
+  ipAddress: 'ipAddress',
+  createdAt: 'createdAt'
+};
+
 exports.Prisma.RoleScalarFieldEnum = {
   id: 'id',
   name: 'name',
@@ -412,6 +420,7 @@ exports.Prisma.ModelName = {
   Device: 'Device',
   RefreshToken: 'RefreshToken',
   PasswordHistory: 'PasswordHistory',
+  LoginAttempt: 'LoginAttempt',
   Role: 'Role',
   PermissionPoint: 'PermissionPoint',
   Menu: 'Menu',

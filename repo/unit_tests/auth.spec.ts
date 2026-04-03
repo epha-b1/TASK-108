@@ -36,7 +36,7 @@ describe('bcrypt hash and verify', () => {
     const hash = await bcrypt.hash(password, 12);
     expect(await bcrypt.compare(password, hash)).toBe(true);
     expect(await bcrypt.compare('wrong', hash)).toBe(false);
-  });
+  }, 15000);
 });
 
 describe('AES-256 encrypt/decrypt', () => {

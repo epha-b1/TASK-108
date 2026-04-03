@@ -3,11 +3,19 @@ import helmet from 'helmet';
 import compression from 'compression';
 import swaggerUi from 'swagger-ui-express';
 import { auditMiddleware } from './middleware/audit.middleware';
+import { idempotencyMiddleware } from './middleware/idempotency.middleware';
 import authRoutes from './routes/auth.routes';
 import usersRoutes from './routes/users.routes';
 import { rolesRouter, permissionPointsRouter, menusRouter, userRolesRouter } from './routes/rbac.routes';
+import resourcesRoutes, { travelTimesRouter } from './routes/resources.routes';
+import itinerariesRoutes, { sharedRouter } from './routes/itineraries.routes';
+import importRoutes from './routes/import.routes';
+import modelsRoutes from './routes/models.routes';
+import notificationsRoutes from './routes/notifications.routes';
+import auditRoutes from './routes/audit.routes';
 import { AppError, NOT_FOUND, INTERNAL_ERROR } from './utils/errors';
 import { logger, getTraceId } from './utils/logger';
+import { apiSpec } from './config/swagger';
 
 const app = express();
 
@@ -16,32 +24,13 @@ app.use(compression());
 app.use(express.json());
 
 app.use(auditMiddleware);
+app.use(idempotencyMiddleware);
 
 app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-const stubSpec = {
-  openapi: '3.0.3',
-  info: {
-    title: 'TripForge API',
-    version: '1.0.0',
-    description: 'TripForge Itinerary & Decisioning Platform',
-  },
-  paths: {
-    '/health': {
-      get: {
-        tags: ['Health'],
-        summary: 'Health check',
-        responses: {
-          '200': { description: 'OK' },
-        },
-      },
-    },
-  },
-};
-
-app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(stubSpec));
+app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(apiSpec));
 
 app.use('/auth', authRoutes);
 app.use('/users', usersRoutes);
@@ -49,6 +38,14 @@ app.use('/roles', rolesRouter);
 app.use('/permission-points', permissionPointsRouter);
 app.use('/menus', menusRouter);
 app.use('/users', userRolesRouter);
+app.use('/resources', resourcesRoutes);
+app.use('/travel-times', travelTimesRouter);
+app.use('/itineraries', itinerariesRoutes);
+app.use('/', sharedRouter);
+app.use('/', importRoutes);
+app.use('/models', modelsRoutes);
+app.use('/', notificationsRoutes);
+app.use('/', auditRoutes);
 
 app.use((_req: Request, _res: Response, next: NextFunction) => {
   next(new AppError(404, NOT_FOUND, 'Resource not found'));
@@ -56,12 +53,16 @@ app.use((_req: Request, _res: Response, next: NextFunction) => {
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   if (err instanceof AppError) {
-    res.status(err.statusCode).json({
+    const body: Record<string, unknown> = {
       statusCode: err.statusCode,
       code: err.code,
       message: err.message,
       traceId: getTraceId(),
-    });
+    };
+    if (err.details !== undefined) {
+      body.details = err.details;
+    }
+    res.status(err.statusCode).json(body);
     return;
   }
 

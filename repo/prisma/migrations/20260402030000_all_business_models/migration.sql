@@ -42,7 +42,7 @@ CREATE TABLE `travel_time_matrices` (
     `travel_minutes` INTEGER NOT NULL,
     `transport_mode` VARCHAR(20) NOT NULL DEFAULT 'walking',
     `updated_at` DATETIME(3) NOT NULL,
-    UNIQUE INDEX `travel_time_matrices_from_resource_id_to_resource_id_transport_key`(`from_resource_id`, `to_resource_id`, `transport_mode`),
+    UNIQUE INDEX `ttm_from_to_mode_key`(`from_resource_id`, `to_resource_id`, `transport_mode`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

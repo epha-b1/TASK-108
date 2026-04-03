@@ -36,6 +36,7 @@ model User {
   securityQuestions   SecurityQuestion[]
   passwordHistory     PasswordHistory[]
   userRoles           UserRole[]
+  loginAttempts       LoginAttempt[]
   itineraries         Itinerary[]
   importBatches       ImportBatch[]
   notifications       Notification[]
@@ -91,6 +92,18 @@ model PasswordHistory {
   user         User     @relation(fields: [userId], references: [id])
 
   @@map("password_history")
+}
+
+model LoginAttempt {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  success   Boolean  @default(false)
+  ipAddress String?  @map("ip_address") @db.VarChar(45)
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("login_attempts")
 }
 
 model Role {

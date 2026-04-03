@@ -5,7 +5,7 @@ import { getPrisma } from '../config/database';
 import { env } from '../config/environment';
 import { authConfig } from '../config/auth';
 import { encrypt, decrypt, hashSha256 } from '../utils/crypto';
-import { AppError, VALIDATION_ERROR, UNAUTHORIZED, CONFLICT, NOT_FOUND } from '../utils/errors';
+import { AppError, VALIDATION_ERROR, UNAUTHORIZED, CONFLICT, NOT_FOUND, RATE_LIMITED } from '../utils/errors';
 import { JwtPayload, TokenPair, UserRole } from '../types/auth.types';
 
 const BCRYPT_ROUNDS = 12;
@@ -97,12 +97,23 @@ export async function login(
   password: string,
   deviceFingerprint?: string,
   lastKnownCity?: string,
-): Promise<{ tokens: TokenPair; user: { id: string; username: string; role: string } }> {
+  challengeToken?: string,
+): Promise<{ tokens: TokenPair; user: { id: string; username: string; role: string } } | { challengeToken: string; retryAfterSeconds: number; message: string }> {
   const prisma = getPrisma();
 
   const user = await prisma.user.findUnique({ where: { username } });
   if (!user) {
     throw new AppError(401, UNAUTHORIZED, 'Invalid credentials');
+  }
+
+  // Rolling lockout: auto-unlock if lock window has expired
+  if (user.lockedUntil && user.lockedUntil <= new Date()) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lockedUntil: null, status: 'active' },
+    });
+    user.lockedUntil = null;
+    user.status = 'active';
   }
 
   if (user.status === 'locked' || (user.lockedUntil && user.lockedUntil > new Date())) {
@@ -115,28 +126,42 @@ export async function login(
 
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) {
-    const newFailedAttempts = user.failedAttempts + 1;
-    const updateData: Record<string, unknown> = { failedAttempts: newFailedAttempts };
-
-    if (newFailedAttempts >= MAX_FAILED_ATTEMPTS) {
-      const lockUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000);
-      updateData.lockedUntil = lockUntil;
-      updateData.status = 'locked';
-    }
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: updateData,
+    // Record the failed attempt
+    await prisma.loginAttempt.create({
+      data: { userId: user.id, success: false },
     });
+
+    // Count failures in the rolling 15-minute window
+    const windowStart = new Date(Date.now() - LOCKOUT_MINUTES * 60 * 1000);
+    const recentFailures = await prisma.loginAttempt.count({
+      where: {
+        userId: user.id,
+        success: false,
+        createdAt: { gte: windowStart },
+      },
+    });
+
+    if (recentFailures >= MAX_FAILED_ATTEMPTS) {
+      const lockUntil = new Date(Date.now() + LOCKOUT_MINUTES * 60 * 1000);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { lockedUntil: lockUntil, status: 'locked' },
+      });
+    }
 
     throw new AppError(401, UNAUTHORIZED, 'Invalid credentials');
   }
 
-  // Reset failed attempts on success
-  await prisma.user.update({
-    where: { id: user.id },
-    data: { failedAttempts: 0, lockedUntil: null, status: user.status === 'locked' ? 'active' : user.status },
+  // Successful login — record it and clear lock state
+  await prisma.loginAttempt.create({
+    data: { userId: user.id, success: true },
   });
+  if (user.status === 'locked' || user.lockedUntil) {
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { lockedUntil: null, status: 'active' },
+    });
+  }
 
   // Device registration
   const fpHash = deviceFingerprint
@@ -150,7 +175,18 @@ export async function login(
   if (!device) {
     const deviceCount = await prisma.device.count({ where: { userId: user.id } });
     if (deviceCount >= MAX_DEVICES) {
-      throw new AppError(400, 'DEVICE_LIMIT_REACHED', `Maximum ${MAX_DEVICES} devices allowed. Remove a device first.`);
+      // Return 409 with device list so client can prompt removal
+      const existingDevices = await prisma.device.findMany({
+        where: { userId: user.id },
+        select: { id: true, lastSeenAt: true, lastKnownCity: true, createdAt: true },
+        orderBy: { lastSeenAt: 'desc' },
+      });
+      throw new AppError(
+        409,
+        'DEVICE_LIMIT_REACHED',
+        `Maximum ${MAX_DEVICES} devices allowed. Remove a device first.`,
+        { devices: existingDevices },
+      );
     }
 
     device = await prisma.device.create({
@@ -162,24 +198,75 @@ export async function login(
       },
     });
   } else {
-    // Unusual location detection
-    if (
-      lastKnownCity &&
-      device.lastKnownCity &&
-      lastKnownCity.trim().toLowerCase() !== device.lastKnownCity.trim().toLowerCase()
-    ) {
-      // Update city after challenge acknowledged
+    // If challengeToken provided, validate it and skip location check
+    if (challengeToken) {
+      // Find the per-attempt challenge record by token
+      const attemptKey = `challenge:${user.id}:${fpHash}:${challengeToken}`;
+      const challenge = await prisma.idempotencyKey.findUnique({ where: { key: attemptKey } });
+      if (!challenge || challenge.expiresAt < new Date() || challenge.operationType !== 'location_challenge') {
+        throw new AppError(401, UNAUTHORIZED, 'Invalid or expired challenge token');
+      }
+      // Consume the challenge token (one-time use)
+      await prisma.idempotencyKey.delete({ where: { key: attemptKey } });
+      // Update device city
       await prisma.device.update({
         where: { id: device.id },
         data: { lastSeenAt: new Date(), lastKnownCity },
       });
-      throw new AppError(429, 'UNUSUAL_LOCATION', 'Unusual location detected. Please confirm your identity.');
-    }
+    } else if (
+      lastKnownCity &&
+      device.lastKnownCity &&
+      lastKnownCity.trim().toLowerCase() !== device.lastKnownCity.trim().toLowerCase()
+    ) {
+      // Unusual location detection — issue a challenge token
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
 
-    await prisma.device.update({
-      where: { id: device.id },
-      data: { lastSeenAt: new Date(), lastKnownCity: lastKnownCity || device.lastKnownCity },
-    });
+      // Rate limit: count per-attempt challenge rows in the last rolling hour
+      const recentChallenges = await prisma.idempotencyKey.findMany({
+        where: {
+          key: { startsWith: `challenge:${user.id}:${fpHash}:` },
+          operationType: 'location_challenge',
+          createdAt: { gte: oneHourAgo },
+        },
+      });
+
+      if (recentChallenges.length >= 3) {
+        // Find the oldest challenge in the window to compute retryAfter
+        const oldest = recentChallenges.reduce((a, b) =>
+          a.createdAt < b.createdAt ? a : b,
+        );
+        const retryAfterSeconds = Math.max(1, Math.ceil((oldest.createdAt.getTime() + 3600000 - Date.now()) / 1000));
+        throw new AppError(429, RATE_LIMITED, `Too many challenge attempts. Retry after ${retryAfterSeconds} seconds.`);
+      }
+
+      // Generate unique per-attempt challenge token
+      const newChallengeToken = uuidv4();
+      const attemptKey = `challenge:${user.id}:${fpHash}:${newChallengeToken}`;
+
+      await prisma.idempotencyKey.create({
+        data: {
+          key: attemptKey,
+          operationType: 'location_challenge',
+          responseBody: {
+            challengeToken: newChallengeToken,
+            cityFrom: device.lastKnownCity,
+            cityTo: lastKnownCity,
+          },
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000), // 5-minute TTL
+        },
+      });
+
+      return {
+        challengeToken: newChallengeToken,
+        retryAfterSeconds: 300,
+        message: 'Unusual location detected. Please confirm your identity.',
+      };
+    } else {
+      await prisma.device.update({
+        where: { id: device.id },
+        data: { lastSeenAt: new Date(), lastKnownCity: lastKnownCity || device.lastKnownCity },
+      });
+    }
   }
 
   // Issue tokens

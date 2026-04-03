@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { getPrisma } from '../config/database';
-import { AppError, NOT_FOUND, VALIDATION_ERROR } from '../utils/errors';
+import { AppError, NOT_FOUND, FORBIDDEN, VALIDATION_ERROR } from '../utils/errors';
 
 export async function listUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -27,6 +27,11 @@ export async function listUsers(req: Request, res: Response, next: NextFunction)
 
 export async function getUser(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
+    // Non-admin can only fetch own profile
+    if (req.user!.role !== 'admin' && req.user!.userId !== req.params.id) {
+      throw new AppError(403, FORBIDDEN, 'Access denied');
+    }
+
     const prisma = getPrisma();
     const user = await prisma.user.findUnique({
       where: { id: req.params.id as string },
