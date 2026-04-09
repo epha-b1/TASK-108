@@ -5,6 +5,7 @@ import * as routingService from '../services/routing.service';
 import { getPrisma } from '../config/database';
 import { AppError, NOT_FOUND, FORBIDDEN } from '../utils/errors';
 import { audit } from '../services/audit.service';
+import { itineraryLog } from '../utils/logger';
 
 async function enforceOwnership(itineraryId: string, userId: string, role: string) {
   const prisma = getPrisma();
@@ -18,6 +19,7 @@ export async function createItineraryHandler(req: Request, res: Response, next: 
   try {
     const result = await itineraryService.createItinerary(req.user!.userId, req.body);
     audit(req, 'itinerary.create', 'itinerary', result.id, { title: req.body.title });
+    itineraryLog.info('itinerary.create', { itineraryId: result.id, ownerId: req.user!.userId });
     res.status(201).json(result);
   } catch (err) {
     next(err);

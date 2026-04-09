@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { getPrisma } from '../config/database';
 import { processOutbox } from './notification.service';
-import { logger } from '../utils/logger';
+import { systemLog, notificationLog, authLog } from '../utils/logger';
 
 let outboxTask: cron.ScheduledTask | null = null;
 let capResetTask: cron.ScheduledTask | null = null;
@@ -14,10 +14,10 @@ export function startScheduler(): void {
     try {
       const results = await processOutbox();
       if (results.length > 0) {
-        logger.info('Outbox processed', { count: results.length, results });
+        notificationLog.info('outbox processed', { count: results.length, results });
       }
     } catch (err) {
-      logger.error('Outbox processing failed', { error: (err as Error).message });
+      notificationLog.error('outbox processing failed', { error: (err as Error).message });
     }
   });
 
@@ -29,9 +29,9 @@ export function startScheduler(): void {
         where: { dailySent: { gt: 0 } },
         data: { dailySent: 0 },
       });
-      logger.info('Daily notification cap reset', { count: result.count });
+      notificationLog.info('daily notification cap reset', { count: result.count });
     } catch (err) {
-      logger.error('Daily cap reset failed', { error: (err as Error).message });
+      notificationLog.error('daily cap reset failed', { error: (err as Error).message });
     }
   }, { timezone: 'UTC' });
 
@@ -43,10 +43,10 @@ export function startScheduler(): void {
         where: { expiresAt: { lt: new Date() } },
       });
       if (result.count > 0) {
-        logger.info('Expired idempotency keys cleaned', { count: result.count });
+        systemLog.info('expired idempotency keys cleaned', { count: result.count });
       }
     } catch (err) {
-      logger.error('Idempotency cleanup failed', { error: (err as Error).message });
+      systemLog.error('idempotency cleanup failed', { error: (err as Error).message });
     }
   });
 
@@ -63,14 +63,14 @@ export function startScheduler(): void {
         },
       });
       if (result.count > 0) {
-        logger.info('Expired refresh tokens cleaned', { count: result.count });
+        authLog.info('expired refresh tokens cleaned', { count: result.count });
       }
     } catch (err) {
-      logger.error('Refresh token cleanup failed', { error: (err as Error).message });
+      authLog.error('refresh token cleanup failed', { error: (err as Error).message });
     }
   });
 
-  logger.info('Background scheduler started');
+  systemLog.info('background scheduler started');
 }
 
 export function stopScheduler(): void {
@@ -78,5 +78,5 @@ export function stopScheduler(): void {
   capResetTask?.stop();
   idempotencyCleanupTask?.stop();
   refreshTokenCleanupTask?.stop();
-  logger.info('Background scheduler stopped');
+  systemLog.info('background scheduler stopped');
 }

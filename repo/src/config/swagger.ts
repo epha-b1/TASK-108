@@ -33,10 +33,19 @@ export const apiSpec: any = {
       },
       ChallengeResponse: {
         type: 'object',
+        description:
+          'CHALLENGE_REQUIRED 429 envelope returned by POST /auth/login when an unusual location is detected for a known device. ' +
+          'Carries the canonical error envelope fields (statusCode/code/message/requestId) PLUS top-level challengeToken + retryAfterSeconds for clients that need them. ' +
+          'When the rolling-hour challenge limit is exceeded the same endpoint returns the canonical envelope with code=RATE_LIMITED and no challengeToken.',
+        required: ['statusCode', 'code', 'message', 'requestId', 'challengeToken', 'retryAfterSeconds'],
         properties: {
+          statusCode: { type: 'integer', example: 429 },
+          code: { type: 'string', example: 'CHALLENGE_REQUIRED' },
+          message: { type: 'string', example: 'Unusual location detected. Please confirm your identity.' },
+          requestId: { type: 'string', description: 'Per-request correlation id; matches the X-Request-Id response header.' },
+          traceId: { type: 'string', description: 'DEPRECATED alias for requestId.' },
           challengeToken: { type: 'string', format: 'uuid' },
           retryAfterSeconds: { type: 'integer', example: 300 },
-          message: { type: 'string' },
         },
       },
       DeviceLimitError: {

@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { requestStore, logger } from '../utils/logger';
+import { requestStore, requestLog } from '../utils/logger';
 
 /**
  * Per-request correlation middleware.
@@ -31,12 +31,14 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
 
     res.on('finish', () => {
       const duration = Date.now() - startTime;
-      logger.info('request completed', {
+      // Per the structured-log category standard, request-completion lines
+      // are tagged `category: 'request'`. requestId is auto-injected by the
+      // global format from AsyncLocalStorage.
+      requestLog.info('request completed', {
         method: req.method,
         path: req.originalUrl,
         statusCode: res.statusCode,
         duration,
-        requestId,
       });
     });
 

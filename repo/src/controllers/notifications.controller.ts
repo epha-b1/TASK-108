@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import * as notificationService from '../services/notification.service';
 import { audit } from '../services/audit.service';
+import { notificationLog } from '../utils/logger';
 
 export async function createTemplateHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -39,6 +40,13 @@ export async function sendNotificationHandler(req: Request, res: Response, next:
     const { userId, type, templateCode, variables, subject, message } = req.body;
     const result = await notificationService.sendNotification(userId, type, templateCode, variables, subject, message);
     audit(req, 'notification.send', 'notification', result.id, {
+      recipientUserId: userId,
+      type,
+      templateCode: templateCode ?? null,
+    });
+    // Hygiene: do not log message body or template variables (may contain PII).
+    notificationLog.info('notification.send', {
+      notificationId: result.id,
       recipientUserId: userId,
       type,
       templateCode: templateCode ?? null,

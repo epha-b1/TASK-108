@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import * as importService from '../services/import.service';
 import { audit } from '../services/audit.service';
+import { importLog } from '../utils/logger';
 
 export async function downloadTemplateHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -27,6 +28,13 @@ export async function uploadHandler(req: Request, res: Response, next: NextFunct
     );
     if (result?.id) {
       audit(req, 'import.upload', 'import_batch', result.id, {
+        entityType,
+        totalRows: result.totalRows,
+        successRows: result.successRows,
+        errorRows: result.errorRows,
+      });
+      importLog.info('import.upload', {
+        batchId: result.id,
         entityType,
         totalRows: result.totalRows,
         successRows: result.successRows,

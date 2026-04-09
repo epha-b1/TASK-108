@@ -111,7 +111,7 @@ curl -s http://localhost:3000/health
 
 ### Canonical error envelope
 
-Every non-2xx response returns:
+Every non-2xx response — **including both branches of HTTP 429** — returns:
 
 ```json
 {
@@ -122,6 +122,18 @@ Every non-2xx response returns:
   "details": [...]
 }
 ```
+
+The two HTTP 429 paths are explicit and distinct:
+
+| Branch | `code` | Extras |
+|---|---|---|
+| Unusual-location challenge issued | `CHALLENGE_REQUIRED` | `challengeToken`, `retryAfterSeconds` at top level (preserved for existing clients) |
+| 4th challenge inside the rolling hour | `RATE_LIMITED` | no `challengeToken`; `message` mentions retry timing |
+
+In all cases the body's `requestId` is identical to the `X-Request-Id`
+response header. The parameterised contract is enforced by
+`API_tests/envelope.api.spec.ts` and the dedicated 429 suite at
+`API_tests/rate_limit_envelope.api.spec.ts`.
 
 `requestId` is the canonical correlation field and always equals the
 `X-Request-Id` response header.
@@ -234,6 +246,38 @@ Max 5 active devices per user. 6th login returns:
 
 10 failed login attempts within a rolling 15-minute window locks the account
 for 15 minutes. Failed attempts outside the window do not count.
+
+### Structured logs — `category` field
+
+Every meaningful structured log line carries a stable `category` field drawn
+from a closed taxonomy, so observability tooling can filter and alert by
+domain without parsing free text:
+
+| Category | Emitted from |
+|---|---|
+| `request` | HTTP request-completion lines from `auditMiddleware` |
+| `auth` | Login, logout, password change, challenge, device flows |
+| `rbac` | Role / permission point / menu / user-role mutations |
+| `itinerary` | Itinerary CRUD, items, versions, sharing, optimisation |
+| `resource` | Resource CRUD, hours, closures, travel times |
+| `import` | Bulk import upload / commit / rollback |
+| `model` | Model registry + inference adapter events (raw input keys only — no PII payloads) |
+| `notification` | Notification send + outbox processor + template ops |
+| `audit` | Audit-row write failures (the rows themselves live in `audit_logs`) |
+| `system` | Startup, shutdown, scheduler, unhandled errors, idempotency middleware errors |
+
+The set is enforced by `src/utils/logger.ts:LOG_CATEGORIES`. Domain code
+**must** use one of the pre-bound category loggers (`authLog`, `requestLog`,
+…) or `categoryLogger('<name>')`; calling the raw `logger` directly is
+discouraged. The contract is locked by `unit_tests/logger_category.spec.ts`,
+which captures live log entries through a stream transport and asserts the
+field on every category plus on the request-completion middleware and the
+global error handler.
+
+Sensitive-data hygiene is preserved: passwords, access/refresh tokens,
+encrypted security-question answers, and raw model inference inputs are
+**never** logged. Inference logs record only `inputKeys` (key names) and a
+`hasContext` flag.
 
 ---
 

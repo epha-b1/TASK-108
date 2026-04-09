@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import * as modelService from '../services/model.service';
 import { audit } from '../services/audit.service';
+import { modelLog } from '../utils/logger';
 
 export async function registerModelHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -61,6 +62,14 @@ export async function inferHandler(req: Request, res: Response, next: NextFuncti
     const result = await modelService.infer(req.params.id as string, input, context, req.user?.userId);
     audit(req, 'model.infer', 'model', req.params.id as string, {
       // Don't log raw input — could contain PII. Just record dimensionality.
+      inputKeys: Object.keys(input ?? {}),
+      hasContext: !!context,
+    });
+    // PII hygiene: NEVER log the raw input. We log only the *shape* of the
+    // payload (key names + flag for context presence) so observability still
+    // sees a per-inference event.
+    modelLog.info('model.infer', {
+      modelId: req.params.id,
       inputKeys: Object.keys(input ?? {}),
       hasContext: !!context,
     });

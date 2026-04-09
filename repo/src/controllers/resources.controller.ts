@@ -1,11 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import * as resourceService from '../services/resource.service';
 import { audit } from '../services/audit.service';
+import { resourceLog } from '../utils/logger';
 
 export async function createResourceHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const result = await resourceService.createResource(req.body);
     audit(req, 'resource.create', 'resource', result.id, { name: result.name, type: result.type });
+    resourceLog.info('resource.create', { resourceId: result.id, type: result.type });
     res.status(201).json(result);
   } catch (err) {
     next(err);

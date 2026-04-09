@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import * as authService from '../services/auth.service';
 import { audit, logAction } from '../services/audit.service';
-import { getRequestId } from '../utils/logger';
+import { getRequestId, authLog } from '../utils/logger';
+import { CHALLENGE_REQUIRED } from '../utils/errors';
 
 export async function registerHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -20,13 +21,35 @@ export async function loginHandler(req: Request, res: Response, next: NextFuncti
     const { username, password, deviceFingerprint, lastKnownCity, challengeToken } = req.body;
     const result = await authService.login(username, password, deviceFingerprint, lastKnownCity, challengeToken);
 
-    // Challenge response (unusual location)
+    // Unusual-location challenge ISSUANCE branch.
+    //
+    // Wrapped in the canonical error envelope (statusCode/code/message/
+    // requestId/traceId) so envelope.api.spec.ts and the new
+    // assert429Envelope helper see a consistent shape regardless of which
+    // 429 path produced the response. The challengeToken / retryAfterSeconds
+    // fields from the service are preserved at the top level so existing
+    // clients keep working unchanged.
     if ('challengeToken' in result) {
-      res.status(429).json(result);
+      const requestId = getRequestId();
+      authLog.warn('login.challenge_issued', {
+        username,
+        // Don't log the token itself — it's a one-shot bearer.
+        retryAfterSeconds: result.retryAfterSeconds,
+      });
+      res.status(429).json({
+        statusCode: 429,
+        code: CHALLENGE_REQUIRED,
+        message: result.message,
+        requestId,
+        traceId: requestId,
+        challengeToken: result.challengeToken,
+        retryAfterSeconds: result.retryAfterSeconds,
+      });
       return;
     }
 
     logAction(result.user.id, 'user.login', 'user', result.user.id, { username }, getRequestId()).catch(() => {});
+    authLog.info('login.success', { userId: result.user.id, username });
     res.status(200).json({
       accessToken: result.tokens.accessToken,
       refreshToken: result.tokens.refreshToken,

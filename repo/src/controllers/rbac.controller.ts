@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import * as rbacService from '../services/rbac.service';
 import { audit } from '../services/audit.service';
+import { rbacLog } from '../utils/logger';
 
 export async function createRoleHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -78,6 +79,7 @@ export async function assignRolesToUserHandler(req: Request, res: Response, next
     const { roleIds } = req.body;
     const result = await rbacService.assignRolesToUser(req.params.id as string, roleIds);
     audit(req, 'user.assign_roles', 'user', req.params.id as string, { roleIds });
+    rbacLog.info('user.assign_roles', { targetUserId: req.params.id, roleIds });
     res.json(result);
   } catch (err) {
     next(err);

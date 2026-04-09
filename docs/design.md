@@ -524,11 +524,85 @@ Rules:
 
 Standard codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED` (401), `FORBIDDEN`
 (403), `NOT_FOUND` (404), `CONFLICT` (409), `IDEMPOTENCY_CONFLICT` (409),
-`RATE_LIMITED` (429), `DEVICE_LIMIT_REACHED` (409), `ACCOUNT_LOCKED` (423),
-`INTERNAL_ERROR` (500).
+`CHALLENGE_REQUIRED` (429 — unusual-location issuance branch),
+`RATE_LIMITED` (429 — challenge throttle, also used for notification daily-cap),
+`DEVICE_LIMIT_REACHED` (409), `ACCOUNT_LOCKED` (423), `INTERNAL_ERROR` (500).
+
+Both 429 branches go through the canonical envelope. The
+`CHALLENGE_REQUIRED` issuance branch additionally exposes
+`challengeToken` and `retryAfterSeconds` at the top level so existing
+clients can read the token without descending into a wrapper object.
 
 Coverage of the envelope across status codes is asserted by
-`API_tests/envelope.api.spec.ts`.
+`API_tests/envelope.api.spec.ts` (parameterised matrix including both
+429 branches) and locked again by `API_tests/rate_limit_envelope.api.spec.ts`.
+
+---
+
+## 9.1 Logging — `category` standard
+
+Every meaningful structured log line written by TripForge carries a `category`
+field drawn from a closed taxonomy. The set is small, stable, and enforced
+in code by `src/utils/logger.ts:LOG_CATEGORIES`.
+
+| Category | Use |
+|---|---|
+| `request` | HTTP request-completion lines from `auditMiddleware` (one per response) |
+| `auth` | Login, logout, password change, challenge issuance, device flows |
+| `rbac` | Role / permission point / menu / user-role mutations |
+| `itinerary` | Itinerary CRUD, items, versions, sharing, optimisation |
+| `resource` | Resource CRUD, hours, closures, travel times |
+| `import` | Bulk import upload / commit / rollback |
+| `model` | Model registry + inference adapter events (key names only — never raw input) |
+| `notification` | Notification send + outbox processor + template ops |
+| `audit` | Audit-row write failures (the rows themselves live in `audit_logs`) |
+| `system` | Startup, shutdown, scheduler, unhandled errors, idempotency middleware errors |
+
+### How to write a structured log
+
+Code MUST go through one of the pre-bound category loggers exported from
+`src/utils/logger.ts`. Calling the raw winston `logger` directly is
+discouraged and the only call sites that still do so are tests that need
+to install transient transports.
+
+```ts
+import { authLog, modelLog } from '../utils/logger';
+
+authLog.info('login.success', { userId, username });
+authLog.warn('login.challenge_issued', { username, retryAfterSeconds });
+
+// PII hygiene: log shape, not contents.
+modelLog.info('model.infer', { modelId, inputKeys: Object.keys(input ?? {}), hasContext: !!context });
+```
+
+The `requestId` field is auto-injected from the per-request
+`AsyncLocalStorage` context, so log entries always carry the same
+correlation id as the response envelope and the `audit_logs.trace_id`
+column.
+
+### Sensitive-data hygiene
+
+The category loggers do not strip secrets — call sites are responsible for
+not passing them. The codebase rules are:
+
+- Never log raw `password`, `currentPassword`, `newPassword`, `accessToken`,
+  `refreshToken`, `tokenHash`, or `answerEncrypted`. Validation, redaction,
+  and bcrypt work on these fields **before** they reach any logger.
+- Never log a model inference's raw `input` object — only its key names
+  (`Object.keys(input ?? {})`) and a `hasContext` boolean.
+- Never log a notification's `message` body or `variables` map — only the
+  recipient id, type, and template code.
+- Idempotency cache responses are redacted by `redactSecrets()` in
+  `src/middleware/idempotency.middleware.ts` before being persisted, so
+  even cached replays cannot leak tokens.
+
+### Tests
+
+`unit_tests/logger_category.spec.ts` installs a transient
+`winston.transports.Stream` capture, drives every pre-bound category logger,
+the request middleware completion line, and the global error handler's
+`unhandled error` line, and asserts that each entry carries the expected
+`category` value plus the auto-injected `requestId`.
 
 ---
 

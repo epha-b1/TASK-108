@@ -1,7 +1,7 @@
 import { Request } from 'express';
 import { getPrisma } from '../config/database';
 import { Prisma } from '../models/prisma';
-import { getRequestId, logger } from '../utils/logger';
+import { getRequestId, auditLog as auditLogger } from '../utils/logger';
 
 /* ---------- Types ---------- */
 
@@ -139,7 +139,7 @@ export function audit(
   // user-facing mutation, but we DO want it surfaced in the structured logs
   // so an alert can be wired off log volume.
   logAction(actorId, action, resourceType, resourceId, detail, requestId).catch((err) => {
-    logger.error('audit log write failed', {
+    auditLogger.error('audit log write failed', {
       action,
       resourceType,
       resourceId,

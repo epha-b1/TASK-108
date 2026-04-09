@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { getPrisma } from '../config/database';
 import { Prisma } from '../models/prisma';
-import { logger, getRequestId } from '../utils/logger';
+import { systemLog, getRequestId } from '../utils/logger';
 import { IDEMPOTENCY_CONFLICT, UNAUTHORIZED } from '../utils/errors';
 import { env } from '../config/environment';
 import { authConfig } from '../config/auth';
@@ -201,14 +201,14 @@ export async function idempotencyMiddleware(
         where: { key: idempotencyKey },
         data: { responseBody: record as unknown as Prisma.InputJsonValue },
       }).catch((err) => {
-        logger.error('Failed to update idempotency key', { error: (err as Error).message });
+        systemLog.error('failed to update idempotency key', { error: (err as Error).message });
       });
       return originalJson(body);
     };
 
     next();
   } catch (err) {
-    logger.error('Idempotency middleware error', { error: (err as Error).message });
+    systemLog.error('idempotency middleware error', { error: (err as Error).message });
     next();
   }
 }

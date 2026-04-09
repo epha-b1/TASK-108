@@ -18,11 +18,14 @@
  *   403 — non-admin hitting an admin-only route
  *   404 — unknown path
  *   409 — duplicate resource (we use the import idempotency key conflict path)
+ *   429 — both branches of the unusual-location challenge flow:
+ *           - CHALLENGE_REQUIRED (issuance branch with `challengeToken`)
+ *           - RATE_LIMITED       (4th issuance in the rolling hour)
+ *         The dedicated parameterised matrix below uses a fresh user/device
+ *         for each branch so it's deterministic, plus there's a separate
+ *         standalone suite at API_tests/rate_limit_envelope.api.spec.ts that
+ *         pins the same contract.
  *   500 — synthetic test-only `/__test__/boom` (NODE_ENV=test only)
- *
- * 429 (challenge / rate limited) is exercised separately by
- * device_and_challenge.api.spec.ts because the setup is heavier; here we keep
- * it focused on envelope shape.
  */
 
 import request from 'supertest';
@@ -163,6 +166,112 @@ describe('Error envelope — every status code carries requestId + canonical bod
     // Cleanup
     await prisma.resource.deleteMany({ where: { name: { startsWith: `Env Conflict A ${ts}` } } }).catch(() => {});
   });
+
+  it('429 CHALLENGE_REQUIRED — unusual-location issuance branch', async () => {
+    // Fresh user/device so this case is independent of any other test in
+    // the suite. We bootstrap with cityA, then trigger an issuance from cityB.
+    const creds = {
+      username: `env429_chal_${ts}_${uuid().slice(0, 8)}`,
+      password: 'Env429Pwd123!xx',
+    };
+    const fp = `env429_fp_${ts}_${uuid()}`;
+
+    const reg = await request(app)
+      .post('/auth/register')
+      .set('Idempotency-Key', uuid())
+      .send({
+        ...creds,
+        securityQuestions: [
+          { question: 'Q1?', answer: 'a1' },
+          { question: 'Q2?', answer: 'a2' },
+        ],
+      });
+    expect(reg.status).toBe(201);
+    const newUid: string = reg.body.id;
+
+    try {
+      const boot = await request(app)
+        .post('/auth/login')
+        .set('Idempotency-Key', uuid())
+        .send({ ...creds, deviceFingerprint: fp, lastKnownCity: 'Seattle' });
+      expect(boot.status).toBe(200);
+
+      const res = await request(app)
+        .post('/auth/login')
+        .set('Idempotency-Key', uuid())
+        .send({ ...creds, deviceFingerprint: fp, lastKnownCity: 'Tokyo' });
+      assertEnvelope(res, 429, 'CHALLENGE_REQUIRED');
+      expect(typeof res.body.challengeToken).toBe('string');
+    } finally {
+      await prisma.idempotencyKey
+        .deleteMany({ where: { key: { startsWith: `challenge:${newUid}:` } } })
+        .catch(() => {});
+      await prisma.refreshToken.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.device.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.securityQuestion.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.passwordHistory.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.loginAttempt.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.user.deleteMany({ where: { id: newUid } }).catch(() => {});
+    }
+  }, 60000);
+
+  it('429 RATE_LIMITED — 4th challenge in the rolling hour for one device', async () => {
+    const creds = {
+      username: `env429_lim_${ts}_${uuid().slice(0, 8)}`,
+      password: 'Env429LimPwd123!xx',
+    };
+    const fp = `env429_lim_fp_${ts}_${uuid()}`;
+
+    const reg = await request(app)
+      .post('/auth/register')
+      .set('Idempotency-Key', uuid())
+      .send({
+        ...creds,
+        securityQuestions: [
+          { question: 'Q1?', answer: 'a1' },
+          { question: 'Q2?', answer: 'a2' },
+        ],
+      });
+    expect(reg.status).toBe(201);
+    const newUid: string = reg.body.id;
+
+    try {
+      const boot = await request(app)
+        .post('/auth/login')
+        .set('Idempotency-Key', uuid())
+        .send({ ...creds, deviceFingerprint: fp, lastKnownCity: 'Seattle' });
+      expect(boot.status).toBe(200);
+
+      // Burn 3 issuances (without confirming) so the next attempt trips the
+      // 3-per-hour rate limit branch.
+      for (let i = 0; i < 3; i++) {
+        const r = await request(app)
+          .post('/auth/login')
+          .set('Idempotency-Key', uuid())
+          .send({ ...creds, deviceFingerprint: fp, lastKnownCity: 'Tokyo' });
+        expect(r.status).toBe(429);
+        expect(r.body.code).toBe('CHALLENGE_REQUIRED');
+      }
+
+      const limited = await request(app)
+        .post('/auth/login')
+        .set('Idempotency-Key', uuid())
+        .send({ ...creds, deviceFingerprint: fp, lastKnownCity: 'Tokyo' });
+      assertEnvelope(limited, 429, 'RATE_LIMITED');
+      expect(limited.body.challengeToken).toBeUndefined();
+      expect(String(limited.body.message)).toMatch(/too many|retry/i);
+    } finally {
+      await prisma.idempotencyKey
+        .deleteMany({ where: { key: { startsWith: `challenge:${newUid}:` } } })
+        .catch(() => {});
+      await prisma.refreshToken.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.device.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.securityQuestion.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.passwordHistory.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.loginAttempt.deleteMany({ where: { userId: newUid } }).catch(() => {});
+      await prisma.user.deleteMany({ where: { id: newUid } }).catch(() => {});
+    }
+  }, 60000);
 
   it('500 INTERNAL_ERROR — synthetic /__test__/boom', async () => {
     const res = await request(app).get('/__test__/boom');

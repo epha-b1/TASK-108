@@ -1,7 +1,7 @@
 import app from './app';
 import { env } from './config/environment';
 import { getPrisma } from './config/database';
-import { logger } from './utils/logger';
+import { systemLog } from './utils/logger';
 import { startScheduler } from './services/scheduler.service';
 
 async function main(): Promise<void> {
@@ -9,9 +9,9 @@ async function main(): Promise<void> {
 
   try {
     await prisma.$connect();
-    logger.info('Database connected');
+    systemLog.info('database connected');
   } catch (error) {
-    logger.error('Failed to connect to database', { error });
+    systemLog.error('database connection failed', { error });
     process.exit(1);
   }
 
@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   startScheduler();
 
   app.listen(env.port, () => {
-    logger.info(`Server started on port ${env.port}`);
+    systemLog.info('server started', { port: env.port });
   });
 }
 

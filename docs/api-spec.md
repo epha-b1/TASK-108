@@ -148,7 +148,17 @@ paths:
         "423":
           description: Account locked
         "429":
-          description: Unusual location — challenge required
+          description: |
+            Two distinct branches share this status code, both wrapped in the
+            canonical error envelope (statusCode/code/message/requestId):
+              - code=CHALLENGE_REQUIRED — unusual-location detected. Body
+                additionally carries top-level `challengeToken` and
+                `retryAfterSeconds` so existing clients can pick them up
+                without descending into a wrapper. Confirm by re-POSTing
+                /auth/login with the `challengeToken` field.
+              - code=RATE_LIMITED — the rolling-hour challenge limit has been
+                hit (max 3 issuances per device per hour). No `challengeToken`
+                in the body; `message` mentions retry timing.
 
   /auth/refresh:
     post:

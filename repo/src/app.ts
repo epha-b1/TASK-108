@@ -14,7 +14,7 @@ import modelsRoutes from './routes/models.routes';
 import notificationsRoutes from './routes/notifications.routes';
 import auditRoutes from './routes/audit.routes';
 import { AppError, NOT_FOUND, INTERNAL_ERROR } from './utils/errors';
-import { logger, getRequestId } from './utils/logger';
+import { systemLog, getRequestId } from './utils/logger';
 import { apiSpec } from './config/swagger';
 
 const app = express();
@@ -79,7 +79,9 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     return;
   }
 
-  logger.error('unhandled error', {
+  // Unhandled errors go through the `system` category so observability tools
+  // can alert on them independently of normal `request` logs.
+  systemLog.error('unhandled error', {
     error: err.message,
     stack: err.stack,
   });
