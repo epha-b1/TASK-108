@@ -1,5 +1,8 @@
 import { getPrisma } from '../config/database';
 import { AppError, NOT_FOUND, VALIDATION_ERROR, CONFLICT } from '../utils/errors';
+import { RESOURCE_TYPES } from '../schemas/resource.schemas';
+
+const ALLOWED_TYPES: readonly string[] = RESOURCE_TYPES;
 
 /* ---------- Resource CRUD ---------- */
 
@@ -15,9 +18,8 @@ export async function createResource(data: {
   minDwellMinutes?: number;
 }) {
   const prisma = getPrisma();
-  const validTypes = ['attraction', 'lodging', 'meal', 'meeting'];
-  if (!validTypes.includes(data.type)) {
-    throw new AppError(400, VALIDATION_ERROR, `type must be one of: ${validTypes.join(', ')}`);
+  if (!ALLOWED_TYPES.includes(data.type)) {
+    throw new AppError(400, VALIDATION_ERROR, `type must be one of: ${ALLOWED_TYPES.join(', ')}`);
   }
 
   return prisma.resource.create({
@@ -75,9 +77,8 @@ export async function updateResource(id: string, data: Record<string, unknown>) 
   if (!existing) throw new AppError(404, NOT_FOUND, 'Resource not found');
 
   if (data.type) {
-    const validTypes = ['attraction', 'lodging', 'meal', 'meeting'];
-    if (!validTypes.includes(data.type as string)) {
-      throw new AppError(400, VALIDATION_ERROR, `type must be one of: ${validTypes.join(', ')}`);
+    if (!ALLOWED_TYPES.includes(data.type as string)) {
+      throw new AppError(400, VALIDATION_ERROR, `type must be one of: ${ALLOWED_TYPES.join(', ')}`);
     }
   }
 

@@ -1,8 +1,22 @@
 import { z } from 'zod';
 
+/**
+ * Canonical resource type enum.
+ *
+ * This is the single source of truth used by:
+ *   - createResourceSchema (POST /resources validation)
+ *   - resource.service.ts createResource / updateResource
+ *   - import.service.ts row validator and commit
+ *   - swagger / api-spec docs
+ *
+ * Add a new type here and the rest of the system picks it up automatically.
+ */
+export const RESOURCE_TYPES = ['attraction', 'lodging', 'meal', 'meeting'] as const;
+export type ResourceType = (typeof RESOURCE_TYPES)[number];
+
 export const createResourceSchema = z.object({
   name: z.string().min(1, 'Name is required'),
-  type: z.enum(['attraction', 'lodging', 'meal', 'meeting']),
+  type: z.enum(RESOURCE_TYPES),
   streetLine: z.string().optional(),
   city: z.string().optional(),
   region: z.string().optional(),

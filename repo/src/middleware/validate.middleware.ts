@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodSchema, ZodError } from 'zod';
-import { getTraceId } from '../utils/logger';
+import { getRequestId } from '../utils/logger';
 
 export function validate(schema: ZodSchema) {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -9,6 +9,7 @@ export function validate(schema: ZodSchema) {
       next();
     } catch (err) {
       if (err instanceof ZodError) {
+        const requestId = getRequestId();
         res.status(400).json({
           statusCode: 400,
           code: 'VALIDATION_ERROR',
@@ -17,7 +18,8 @@ export function validate(schema: ZodSchema) {
             field: e.path.join('.'),
             message: e.message,
           })),
-          traceId: getTraceId(),
+          requestId,
+          traceId: requestId,
         });
         return;
       }

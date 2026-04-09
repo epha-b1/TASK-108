@@ -1,16 +1,30 @@
 import winston from 'winston';
 import { AsyncLocalStorage } from 'async_hooks';
 
-export const traceStore = new AsyncLocalStorage<{ traceId: string }>();
+/**
+ * Per-request correlation context.
+ *
+ * Canonical field name is `requestId` everywhere — in API responses, in
+ * structured log entries, and in audit log rows. The legacy `traceId` /
+ * `getTraceId()` accessors are kept as backwards-compatible aliases so we can
+ * eliminate drift in one pass without changing every call site at once.
+ */
+export const requestStore = new AsyncLocalStorage<{ requestId: string }>();
 
-export function getTraceId(): string | undefined {
-  return traceStore.getStore()?.traceId;
+/** Canonical accessor — returns the current request's correlation id, if any. */
+export function getRequestId(): string | undefined {
+  return requestStore.getStore()?.requestId;
 }
 
-const traceFormat = winston.format((info) => {
-  const traceId = getTraceId();
-  if (traceId) {
-    info.traceId = traceId;
+/** @deprecated use getRequestId() instead — kept for backwards compatibility. */
+export function getTraceId(): string | undefined {
+  return getRequestId();
+}
+
+const requestIdFormat = winston.format((info) => {
+  const requestId = getRequestId();
+  if (requestId) {
+    info.requestId = requestId;
   }
   return info;
 });
@@ -18,7 +32,7 @@ const traceFormat = winston.format((info) => {
 export const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: winston.format.combine(
-    traceFormat(),
+    requestIdFormat(),
     winston.format.timestamp(),
     winston.format.json(),
   ),

@@ -21,11 +21,13 @@ export const apiSpec: any = {
     schemas: {
       Error: {
         type: 'object',
+        required: ['statusCode', 'code', 'message', 'requestId'],
         properties: {
           statusCode: { type: 'integer' },
           code: { type: 'string' },
           message: { type: 'string' },
-          traceId: { type: 'string' },
+          requestId: { type: 'string', description: 'Per-request correlation id; matches the X-Request-Id response header.' },
+          traceId: { type: 'string', description: 'Deprecated alias for requestId — kept temporarily for backwards compatibility.' },
           details: { type: 'object', description: 'Additional context (e.g. device list on 409)' },
         },
       },
@@ -371,7 +373,7 @@ export const apiSpec: any = {
     },
     '/import/templates/{entityType}': {
       get: {
-        tags: ['Import'], summary: 'Download Excel template',
+        tags: ['Import'], summary: 'Download Excel template (public)', security: [],
         parameters: [{ in: 'path', name: 'entityType', required: true, schema: { type: 'string', enum: ['resources', 'itineraries'] } }],
         responses: { '200': { description: 'Template file (xlsx)' } },
       },

@@ -14,7 +14,7 @@ import modelsRoutes from './routes/models.routes';
 import notificationsRoutes from './routes/notifications.routes';
 import auditRoutes from './routes/audit.routes';
 import { AppError, NOT_FOUND, INTERNAL_ERROR } from './utils/errors';
-import { logger, getTraceId } from './utils/logger';
+import { logger, getRequestId } from './utils/logger';
 import { apiSpec } from './config/swagger';
 
 const app = express();
@@ -52,12 +52,17 @@ app.use((_req: Request, _res: Response, next: NextFunction) => {
 });
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  const requestId = getRequestId();
+
   if (err instanceof AppError) {
     const body: Record<string, unknown> = {
       statusCode: err.statusCode,
       code: err.code,
       message: err.message,
-      traceId: getTraceId(),
+      // Canonical field — every error response carries `requestId`. The legacy
+      // `traceId` alias is kept temporarily so older clients don't break.
+      requestId,
+      traceId: requestId,
     };
     if (err.details !== undefined) {
       body.details = err.details;
@@ -75,7 +80,8 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     statusCode: 500,
     code: INTERNAL_ERROR,
     message: 'Internal server error',
-    traceId: getTraceId(),
+    requestId,
+    traceId: requestId,
   });
 });
 

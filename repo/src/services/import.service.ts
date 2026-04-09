@@ -9,6 +9,7 @@ import {
 } from '../utils/errors';
 import ExcelJS from 'exceljs';
 import { parse } from 'csv-parse/sync';
+import { RESOURCE_TYPES } from '../schemas/resource.schemas';
 
 /* ---------- Types ---------- */
 
@@ -93,9 +94,19 @@ function validateResourceRow(row: Record<string, unknown>, rowNumber: number): R
     }
   }
 
-  const validTypes = ['attraction', 'restaurant', 'hotel', 'transport', 'activity'];
-  if (row.type && !validTypes.includes(String(row.type).toLowerCase())) {
-    errors.push({ rowNumber, field: 'type', message: `type must be one of: ${validTypes.join(', ')}`, rawData: row });
+  // Use the canonical resource type enum from src/schemas/resource.schemas.ts.
+  // Previously this validator accepted attraction|restaurant|hotel|transport|
+  // activity, while resource.service / schema only accepted attraction|lodging|
+  // meal|meeting — so any "valid" import row outside the canonical set would
+  // commit successfully but then break downstream consumers and PATCH /resources.
+  const allowed: readonly string[] = RESOURCE_TYPES;
+  if (row.type && !allowed.includes(String(row.type).toLowerCase())) {
+    errors.push({
+      rowNumber,
+      field: 'type',
+      message: `type must be one of: ${RESOURCE_TYPES.join(', ')}`,
+      rawData: row,
+    });
   }
 
   return errors;

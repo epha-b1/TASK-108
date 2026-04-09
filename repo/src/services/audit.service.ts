@@ -1,5 +1,7 @@
+import { Request } from 'express';
 import { getPrisma } from '../config/database';
 import { Prisma } from '../models/prisma';
+import { getRequestId, logger } from '../utils/logger';
 
 /* ---------- Types ---------- */
 
@@ -101,8 +103,48 @@ export async function logAction(
         resourceId,
         ...(detail ?? {}),
       },
+      // Schema column is still named `traceId` for migration stability, but
+      // semantically it carries the canonical requestId.
       traceId: traceId ?? null,
     },
+  });
+}
+
+/**
+ * Centralised audit emitter for controllers.
+ *
+ * Wraps `logAction` so call sites don't have to:
+ *   - thread the actor id manually,
+ *   - look up the current request id,
+ *   - or remember to swallow errors so audit failures never break requests.
+ *
+ * Usage from a controller:
+ *
+ *     await audit(req, 'resource.create', 'resource', resource.id, { name });
+ *
+ * The `req` argument provides the actor (req.user!.userId) so we never log
+ * mutations performed by anonymous routes (caller is responsible for not
+ * calling this on public endpoints).
+ */
+export function audit(
+  req: Request,
+  action: string,
+  resourceType: string,
+  resourceId: string,
+  detail?: Record<string, unknown>,
+): void {
+  const actorId = req.user?.userId ?? 'anonymous';
+  const requestId = getRequestId();
+  // Fire-and-forget — failure to write an audit row must never block a
+  // user-facing mutation, but we DO want it surfaced in the structured logs
+  // so an alert can be wired off log volume.
+  logAction(actorId, action, resourceType, resourceId, detail, requestId).catch((err) => {
+    logger.error('audit log write failed', {
+      action,
+      resourceType,
+      resourceId,
+      error: (err as Error).message,
+    });
   });
 }
 

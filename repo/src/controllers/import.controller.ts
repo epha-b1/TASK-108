@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import * as importService from '../services/import.service';
+import { audit } from '../services/audit.service';
 
 export async function downloadTemplateHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -24,6 +25,14 @@ export async function uploadHandler(req: Request, res: Response, next: NextFunct
       idempotencyKey,
       deduplicationKey,
     );
+    if (result?.id) {
+      audit(req, 'import.upload', 'import_batch', result.id, {
+        entityType,
+        totalRows: result.totalRows,
+        successRows: result.successRows,
+        errorRows: result.errorRows,
+      });
+    }
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -34,6 +43,10 @@ export async function commitHandler(req: Request, res: Response, next: NextFunct
   try {
     const batchId = req.params.batchId as string;
     const result = await importService.commitBatch(batchId, req.user!.userId);
+    audit(req, 'import.commit', 'import_batch', batchId, {
+      entityType: result.entityType,
+      successRows: result.successRows,
+    });
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -44,6 +57,9 @@ export async function rollbackHandler(req: Request, res: Response, next: NextFun
   try {
     const batchId = req.params.batchId as string;
     const result = await importService.rollbackBatch(batchId, req.user!.userId);
+    audit(req, 'import.rollback', 'import_batch', batchId, {
+      entityType: result.entityType,
+    });
     res.status(200).json(result);
   } catch (err) {
     next(err);

@@ -20,15 +20,29 @@ components:
   schemas:
     Error:
       type: object
+      required: [statusCode, code, message, requestId]
+      description: |
+        Canonical error envelope returned by EVERY non-2xx response. The
+        `requestId` field always matches the `X-Request-Id` response header
+        for the same request, so logs and client telemetry stay correlated.
       properties:
         statusCode:
           type: integer
+          description: HTTP status code.
         code:
           type: string
+          description: Stable machine-readable code (e.g. VALIDATION_ERROR, IDEMPOTENCY_CONFLICT).
         message:
           type: string
         requestId:
           type: string
+          description: Per-request correlation id; matches the X-Request-Id response header.
+        traceId:
+          type: string
+          description: Deprecated alias for requestId — kept temporarily for backwards compatibility with older clients.
+        details:
+          type: object
+          description: Optional structured context (validation errors, device list on 409, etc.).
 
 security:
   - bearerAuth: []
@@ -276,25 +290,10 @@ paths:
       responses:
         "200":
           description: User list
-    post:
-      tags: [Users]
-      summary: Create user (Admin only)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [username, password]
-              properties:
-                username:
-                  type: string
-                password:
-                  type: string
-                  minLength: 12
-      responses:
-        "201":
-          description: User created
+
+  # NOTE: There is no POST /users in TripForge. New accounts are created by
+  # /auth/register (self-service registration). Admin promotion happens by
+  # PATCH /users/{id} on an existing account, not by creating one out of band.
 
   /users/{id}:
     get:
@@ -1302,6 +1301,33 @@ paths:
       responses:
         "200":
           description: Notifications
+    post:
+      tags: [Notifications]
+      summary: Send notification to user (requires notification:write)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, type]
+              properties:
+                userId:
+                  type: string
+                  format: uuid
+                type:
+                  type: string
+                templateCode:
+                  type: string
+                variables:
+                  type: object
+                subject:
+                  type: string
+                message:
+                  type: string
+      responses:
+        "201":
+          description: Notification sent
 
   /notifications/{id}/read:
     patch:

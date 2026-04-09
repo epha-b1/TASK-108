@@ -1,15 +1,32 @@
 import { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { traceStore } from '../utils/logger';
-import { logger } from '../utils/logger';
+import { requestStore, logger } from '../utils/logger';
 
+/**
+ * Per-request correlation middleware.
+ *
+ * Canonical request id is `requestId`. We accept either `X-Request-Id` (the
+ * documented header) or the legacy `X-Trace-Id` from clients, generate a
+ * fresh UUID if neither is present, and:
+ *
+ *   - Echo the value back as both `X-Request-Id` (canonical) and `X-Trace-Id`
+ *     (legacy alias) on every response so existing clients keep working.
+ *   - Stash it in AsyncLocalStorage so error responses, audit log rows, and
+ *     structured log entries can pick it up without threading it through
+ *     every call.
+ */
 export function auditMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const traceId = (req.headers['x-trace-id'] as string) || (req.headers['x-request-id'] as string) || uuidv4();
+  const requestId =
+    (req.headers['x-request-id'] as string) ||
+    (req.headers['x-trace-id'] as string) ||
+    uuidv4();
 
-  res.setHeader('X-Trace-Id', traceId);
-  res.setHeader('X-Request-Id', traceId);
+  // Canonical header — what the spec promises and what tests assert on.
+  res.setHeader('X-Request-Id', requestId);
+  // Legacy alias — keeps any existing client code working.
+  res.setHeader('X-Trace-Id', requestId);
 
-  traceStore.run({ traceId }, () => {
+  requestStore.run({ requestId }, () => {
     const startTime = Date.now();
 
     res.on('finish', () => {
@@ -19,7 +36,7 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
         path: req.originalUrl,
         statusCode: res.statusCode,
         duration,
-        traceId,
+        requestId,
       });
     });
 

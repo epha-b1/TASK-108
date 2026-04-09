@@ -4,12 +4,15 @@ services:
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: mysql://tripforge:tripforge@db:3306/tripforge
-      JWT_SECRET: change_me_in_production
-      ENCRYPTION_KEY: change_me_32_chars_minimum_here_x
-      ACCESS_TOKEN_TTL: "1800"
-      REFRESH_TOKEN_TTL: "1209600"
-      PORT: "3000"
+      # All secrets MUST be provided via .env or the host environment.
+      # docker compose will fail to start if any required value is missing.
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (see .env.example)}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value (>=32 chars)}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set to a 32-character random value}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1800}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-1209600}
+      PORT: ${PORT:-3000}
+      NODE_ENV: ${NODE_ENV:-production}
     depends_on:
       db:
         condition: service_healthy
@@ -30,10 +33,10 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MYSQL_USER: tripforge
-      MYSQL_PASSWORD: tripforge
-      MYSQL_DATABASE: tripforge
-      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER must be set}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set to a strong value}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tripforge}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set to a strong value}
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s

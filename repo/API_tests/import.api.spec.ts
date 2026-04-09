@@ -158,3 +158,76 @@ describe('GET /import/:batchId', () => {
     expect(res.body.id).toBe(batchId);
   });
 });
+
+// === Canonical resource type enum enforcement ===
+// Before the unification, import.service accepted attraction|restaurant|hotel|
+// transport|activity, while resource.service / schemas only accepted
+// attraction|lodging|meal|meeting. Now both share src/schemas/resource.schemas
+// RESOURCE_TYPES, and any non-canonical row must surface as a row-level
+// VALIDATION_ERROR rather than committing dirty data.
+describe('Canonical resource type enforcement', () => {
+  it('200 — accepts canonical types (attraction, lodging, meal, meeting)', async () => {
+    const csv = [
+      'name,type,city',
+      `Canon A ${ts},attraction,TestCity`,
+      `Canon L ${ts},lodging,TestCity`,
+      `Canon M ${ts},meal,TestCity`,
+      `Canon T ${ts},meeting,TestCity`,
+    ].join('\n') + '\n';
+
+    const res = await request(app)
+      .post('/import/upload')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .field('entityType', 'resources')
+      .field('idempotencyKey', `canon_ok_${ts}`)
+      .attach('file', Buffer.from(csv), 'resources.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body.errorRows).toBe(0);
+    expect(res.body.successRows).toBe(4);
+    expect((res.body.errors ?? []).length).toBe(0);
+
+    // Cleanup the rows that the dedup test or commit test might leave behind
+    await prisma.resource.deleteMany({ where: { name: { startsWith: `Canon ` } } }).catch(() => {});
+  });
+
+  it('200 with row errors — rejects legacy non-canonical types', async () => {
+    const csv = [
+      'name,type,city',
+      `Bad Restaurant ${ts},restaurant,TestCity`,
+      `Bad Hotel ${ts},hotel,TestCity`,
+      `Bad Transport ${ts},transport,TestCity`,
+      `Bad Activity ${ts},activity,TestCity`,
+    ].join('\n') + '\n';
+
+    const res = await request(app)
+      .post('/import/upload')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .field('entityType', 'resources')
+      .field('idempotencyKey', `canon_bad_${ts}`)
+      .attach('file', Buffer.from(csv), 'resources.csv');
+
+    expect(res.status).toBe(200);
+    expect(res.body.errorRows).toBe(4);
+    expect(res.body.successRows).toBe(0);
+    const errs = res.body.errors ?? [];
+    expect(errs.length).toBeGreaterThanOrEqual(4);
+    for (const e of errs) {
+      expect(e.field).toBe('type');
+      expect(String(e.message)).toMatch(/type must be one of/);
+      expect(String(e.message)).toMatch(/attraction.*lodging.*meal.*meeting/);
+    }
+  });
+
+  it('400 — POST /resources rejects non-canonical type with VALIDATION_ERROR', async () => {
+    const res = await request(app)
+      .post('/resources')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ name: `Bad Type ${ts}`, type: 'restaurant', city: 'TestCity' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+  });
+});

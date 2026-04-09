@@ -4,8 +4,7 @@ import * as itineraryService from '../services/itinerary.service';
 import * as routingService from '../services/routing.service';
 import { getPrisma } from '../config/database';
 import { AppError, NOT_FOUND, FORBIDDEN } from '../utils/errors';
-import { logAction } from '../services/audit.service';
-import { getTraceId } from '../utils/logger';
+import { audit } from '../services/audit.service';
 
 async function enforceOwnership(itineraryId: string, userId: string, role: string) {
   const prisma = getPrisma();
@@ -18,7 +17,7 @@ async function enforceOwnership(itineraryId: string, userId: string, role: strin
 export async function createItineraryHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const result = await itineraryService.createItinerary(req.user!.userId, req.body);
-    logAction(req.user!.userId, 'itinerary.create', 'itinerary', result.id, { title: req.body.title }, getTraceId()).catch(() => {});
+    audit(req, 'itinerary.create', 'itinerary', result.id, { title: req.body.title });
     res.status(201).json(result);
   } catch (err) {
     next(err);
@@ -51,7 +50,9 @@ export async function getItineraryHandler(req: Request, res: Response, next: Nex
 export async function updateItineraryHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const result = await itineraryService.updateItinerary(req.params.id as string, req.user!.userId, req.user!.role, req.body);
-    logAction(req.user!.userId, 'itinerary.update', 'itinerary', req.params.id as string, {}, getTraceId()).catch(() => {});
+    audit(req, 'itinerary.update', 'itinerary', req.params.id as string, {
+      changes: Object.keys(req.body ?? {}),
+    });
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -61,7 +62,7 @@ export async function updateItineraryHandler(req: Request, res: Response, next: 
 export async function deleteItineraryHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     await itineraryService.deleteItinerary(req.params.id as string, req.user!.userId, req.user!.role);
-    logAction(req.user!.userId, 'itinerary.delete', 'itinerary', req.params.id as string, {}, getTraceId()).catch(() => {});
+    audit(req, 'itinerary.delete', 'itinerary', req.params.id as string);
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -71,6 +72,11 @@ export async function deleteItineraryHandler(req: Request, res: Response, next: 
 export async function addItemHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const result = await itineraryService.addItem(req.params.id as string, req.user!.userId, req.user!.role, req.body);
+    audit(req, 'itinerary.item.add', 'itinerary', req.params.id as string, {
+      itemId: result.id,
+      resourceId: result.resourceId,
+      dayNumber: result.dayNumber,
+    });
     res.status(201).json(result);
   } catch (err) {
     next(err);
@@ -86,6 +92,10 @@ export async function updateItemHandler(req: Request, res: Response, next: NextF
       req.user!.role,
       req.body,
     );
+    audit(req, 'itinerary.item.update', 'itinerary', req.params.id as string, {
+      itemId: req.params.itemId,
+      changes: Object.keys(req.body ?? {}),
+    });
     res.status(200).json(result);
   } catch (err) {
     next(err);
@@ -95,6 +105,9 @@ export async function updateItemHandler(req: Request, res: Response, next: NextF
 export async function removeItemHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     await itineraryService.removeItem(req.params.id as string, req.params.itemId as string, req.user!.userId, req.user!.role);
+    audit(req, 'itinerary.item.delete', 'itinerary', req.params.id as string, {
+      itemId: req.params.itemId,
+    });
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -152,6 +165,8 @@ export async function shareItineraryHandler(req: Request, res: Response, next: N
       where: { id: req.params.id as string },
       data: { shareToken, shareExpiresAt },
     });
+
+    audit(req, 'itinerary.share', 'itinerary', req.params.id as string, { expiresAt: shareExpiresAt });
 
     const shareUrl = `/shared/${shareToken}`;
     res.status(200).json({ shareToken, shareUrl, expiresAt: shareExpiresAt });

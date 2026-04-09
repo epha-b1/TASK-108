@@ -205,7 +205,7 @@ describe('Itinerary versioning semantics', () => {
     }
   });
 
-  it('initial create — produces version 1', async () => {
+  it('initial create — produces version 1 with metadata + empty items', async () => {
     const createRes = await request(app)
       .post('/itineraries')
       .set('Authorization', `Bearer ${orgAToken}`)
@@ -226,10 +226,19 @@ describe('Itinerary versioning semantics', () => {
     expect(Array.isArray(versionsRes.body)).toBe(true);
     expect(versionsRes.body.length).toBe(1);
     expect(versionsRes.body[0].versionNumber).toBe(1);
-    // Snapshot captures the (empty) items list at creation time.
-    expect(Array.isArray(versionsRes.body[0].snapshot)).toBe(true);
-    expect(versionsRes.body[0].snapshot.length).toBe(0);
+    // Snapshot now captures BOTH itinerary metadata and the items list at
+    // creation time (was items-only before the version-fidelity fix).
+    const snap = versionsRes.body[0].snapshot;
+    expect(snap).toBeDefined();
+    expect(snap.schemaVersion).toBeGreaterThanOrEqual(2);
+    expect(snap.metadata).toBeDefined();
+    expect(snap.metadata.id).toBe(verItinId);
+    expect(snap.metadata.destination).toBe('VerCity');
+    expect(snap.metadata.title).toMatch(/Versioning Trip/);
+    expect(Array.isArray(snap.items)).toBe(true);
+    expect(snap.items.length).toBe(0);
   });
+
 
   it('PATCH status only — does NOT create a new version', async () => {
     const before = await request(app)
@@ -256,7 +265,7 @@ describe('Itinerary versioning semantics', () => {
     expect(maxAfter).toBe(maxBefore);
   });
 
-  it('PATCH content (title) — DOES create a new version', async () => {
+  it('PATCH content (title) — creates a version with metadata diff', async () => {
     const before = await request(app)
       .get(`/itineraries/${verItinId}/versions`)
       .set('Authorization', `Bearer ${orgAToken}`);
@@ -276,11 +285,25 @@ describe('Itinerary versioning semantics', () => {
       .set('Authorization', `Bearer ${orgAToken}`);
     expect(after.status).toBe(200);
     expect(after.body.length).toBe(beforeCount + 1);
-    const afterMax = Math.max(...after.body.map((v: { versionNumber: number }) => v.versionNumber));
-    expect(afterMax).toBe(beforeMax + 1);
+    const sorted = [...after.body].sort(
+      (a: { versionNumber: number }, b: { versionNumber: number }) => b.versionNumber - a.versionNumber,
+    );
+    const newest = sorted[0];
+    expect(newest.versionNumber).toBe(beforeMax + 1);
+    // Snapshot reflects the new title.
+    expect(newest.snapshot.metadata.title).toBe(`Versioning Trip Renamed ${ts}`);
+    // Diff metadata should contain a `title` change entry under metadata.
+    const metaChanges = newest.diffMetadata?.metadata ?? [];
+    const titleChange = metaChanges.find((c: { field: string }) => c.field === 'title');
+    expect(titleChange).toBeDefined();
+    expect(titleChange.to).toBe(`Versioning Trip Renamed ${ts}`);
+    // Items list unchanged for this PATCH.
+    expect(newest.diffMetadata?.items?.added?.length ?? 0).toBe(0);
+    expect(newest.diffMetadata?.items?.removed?.length ?? 0).toBe(0);
+    expect(newest.diffMetadata?.items?.modified?.length ?? 0).toBe(0);
   });
 
-  it('PATCH content (destination) — DOES create a new version', async () => {
+  it('PATCH content (destination) — diff includes destination change', async () => {
     const before = await request(app)
       .get(`/itineraries/${verItinId}/versions`)
       .set('Authorization', `Bearer ${orgAToken}`);
@@ -297,6 +320,35 @@ describe('Itinerary versioning semantics', () => {
       .get(`/itineraries/${verItinId}/versions`)
       .set('Authorization', `Bearer ${orgAToken}`);
     expect(after.body.length).toBe(beforeCount + 1);
+    const newest = [...after.body].sort(
+      (a: { versionNumber: number }, b: { versionNumber: number }) => b.versionNumber - a.versionNumber,
+    )[0];
+    expect(newest.snapshot.metadata.destination).toBe('NewDestinationCity');
+    const destChange = (newest.diffMetadata?.metadata ?? []).find(
+      (c: { field: string }) => c.field === 'destination',
+    );
+    expect(destChange).toBeDefined();
+    expect(destChange.to).toBe('NewDestinationCity');
+  });
+
+  it('Add itinerary item — version diff lists the added item', async () => {
+    const itemRes = await request(app)
+      .post(`/itineraries/${verItinId}/items`)
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ resourceId, dayNumber: 1, startTime: '09:00', endTime: '10:00' });
+    expect(itemRes.status).toBe(201);
+    const newItemId = itemRes.body.id;
+
+    const versions = await request(app)
+      .get(`/itineraries/${verItinId}/versions`)
+      .set('Authorization', `Bearer ${orgAToken}`);
+    const newest = [...versions.body].sort(
+      (a: { versionNumber: number }, b: { versionNumber: number }) => b.versionNumber - a.versionNumber,
+    )[0];
+    expect(newest.snapshot.items.length).toBe(1);
+    expect(newest.snapshot.items[0].id).toBe(newItemId);
+    expect(newest.diffMetadata?.items?.added).toContain(newItemId);
   });
 });
 

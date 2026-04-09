@@ -23,14 +23,103 @@ async function enforceOwnership(itineraryId: string, userId: string, role: strin
   return itinerary;
 }
 
+/**
+ * Itinerary metadata fields that participate in version snapshots and diffs.
+ *
+ * `status` is intentionally NOT in this list — status-only updates are routine
+ * lifecycle transitions (draft → published → archived) and shouldn't burn a
+ * new version. The "should we cut a new version?" decision in updateItinerary
+ * only triggers on these content fields.
+ */
+const VERSIONED_METADATA_FIELDS = ['title', 'destination', 'startDate', 'endDate'] as const;
+
+interface ItineraryMetadataSnapshot {
+  id: string;
+  ownerId: string;
+  title: string;
+  destination: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  status: string;
+}
+
+interface ItineraryItemSnapshot {
+  id: string;
+  resourceId: string;
+  dayNumber: number;
+  startTime: string;
+  endTime: string;
+  notes: string | null;
+  position: number;
+}
+
+interface ItinerarySnapshot {
+  schemaVersion: number;
+  metadata: ItineraryMetadataSnapshot;
+  items: ItineraryItemSnapshot[];
+}
+
+interface MetadataDiff {
+  field: string;
+  from: unknown;
+  to: unknown;
+}
+
+function isoOrNull(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  return new Date(value).toISOString();
+}
+
+function buildItemSnapshot(item: {
+  id: string;
+  resourceId: string;
+  dayNumber: number;
+  startTime: string;
+  endTime: string;
+  notes: string | null;
+  position: number;
+}): ItineraryItemSnapshot {
+  return {
+    id: item.id,
+    resourceId: item.resourceId,
+    dayNumber: item.dayNumber,
+    startTime: item.startTime,
+    endTime: item.endTime,
+    notes: item.notes,
+    position: item.position,
+  };
+}
+
 async function createVersion(itineraryId: string, userId: string) {
   const prisma = getPrisma();
 
-  // Get current items as snapshot
+  // Capture both itinerary metadata AND items in the snapshot. Earlier the
+  // snapshot was an items-only array, which meant a renamed itinerary or
+  // shifted travel dates left no recoverable history.
+  const itinerary = await prisma.itinerary.findUnique({
+    where: { id: itineraryId },
+  });
+  if (!itinerary) throw new AppError(404, NOT_FOUND, 'Itinerary not found');
+
   const items = await prisma.itineraryItem.findMany({
     where: { itineraryId },
     orderBy: [{ dayNumber: 'asc' }, { startTime: 'asc' }],
   });
+
+  const snapshot: ItinerarySnapshot = {
+    schemaVersion: 2,
+    metadata: {
+      id: itinerary.id,
+      ownerId: itinerary.ownerId,
+      title: itinerary.title,
+      destination: itinerary.destination ?? null,
+      startDate: isoOrNull(itinerary.startDate),
+      endDate: isoOrNull(itinerary.endDate),
+      status: itinerary.status,
+    },
+    items: items.map(buildItemSnapshot),
+  };
 
   // Determine next version number
   const lastVersion = await prisma.itineraryVersion.findFirst({
@@ -39,39 +128,72 @@ async function createVersion(itineraryId: string, userId: string) {
   });
   const nextNumber = lastVersion ? lastVersion.versionNumber + 1 : 1;
 
-  // Compute diff from previous version
+  // Compute diff from previous version. Diff covers BOTH metadata and items
+  // so consumers can render a full change log without diffing the snapshots
+  // themselves.
   let diffMetadata: Record<string, unknown> | null = null;
   if (lastVersion) {
-    const prevSnapshot = lastVersion.snapshot as Array<Record<string, unknown>>;
-    const currentIds = new Set(items.map((i) => i.id));
-    const prevIds = new Set(prevSnapshot.map((i) => i.id as string));
+    const rawPrev = lastVersion.snapshot as unknown;
 
+    // Snapshots written before schemaVersion 2 were a bare items array. Wrap
+    // legacy rows so the diff computation can treat them uniformly.
+    let prev: ItinerarySnapshot;
+    if (Array.isArray(rawPrev)) {
+      prev = {
+        schemaVersion: 1,
+        metadata: snapshot.metadata, // unknown; assume no metadata change
+        items: rawPrev as unknown as ItineraryItemSnapshot[],
+      };
+    } else {
+      prev = rawPrev as ItinerarySnapshot;
+    }
+
+    // Item-level diff
+    const currentIds = new Set(items.map((i) => i.id));
+    const prevItems = prev.items ?? [];
+    const prevIds = new Set(prevItems.map((i) => i.id));
     const added = items.filter((i) => !prevIds.has(i.id)).map((i) => i.id);
-    const removed = prevSnapshot.filter((i) => !currentIds.has(i.id as string)).map((i) => i.id as string);
+    const removed = prevItems.filter((i) => !currentIds.has(i.id)).map((i) => i.id);
     const modified = items
       .filter((i) => prevIds.has(i.id))
       .filter((cur) => {
-        const prev = prevSnapshot.find((p) => p.id === cur.id);
-        if (!prev) return false;
+        const previous = prevItems.find((p) => p.id === cur.id);
+        if (!previous) return false;
         return (
-          prev.startTime !== cur.startTime ||
-          prev.endTime !== cur.endTime ||
-          prev.dayNumber !== cur.dayNumber ||
-          prev.resourceId !== cur.resourceId ||
-          prev.notes !== cur.notes ||
-          prev.position !== cur.position
+          previous.startTime !== cur.startTime ||
+          previous.endTime !== cur.endTime ||
+          previous.dayNumber !== cur.dayNumber ||
+          previous.resourceId !== cur.resourceId ||
+          previous.notes !== cur.notes ||
+          previous.position !== cur.position
         );
       })
       .map((i) => i.id);
 
-    diffMetadata = { added, removed, modified };
+    // Metadata-level diff. Only the versioned fields participate — status is
+    // tracked in snapshot but not in the diff so a status-only PATCH is a no-op.
+    const metadataChanges: MetadataDiff[] = [];
+    if (prev.schemaVersion >= 2) {
+      for (const field of VERSIONED_METADATA_FIELDS) {
+        const before = (prev.metadata as Record<string, unknown>)[field];
+        const after = (snapshot.metadata as Record<string, unknown>)[field];
+        if (before !== after) {
+          metadataChanges.push({ field, from: before ?? null, to: after ?? null });
+        }
+      }
+    }
+
+    diffMetadata = {
+      items: { added, removed, modified },
+      metadata: metadataChanges,
+    };
   }
 
   return prisma.itineraryVersion.create({
     data: {
       itineraryId,
       versionNumber: nextNumber,
-      snapshot: JSON.parse(JSON.stringify(items)),
+      snapshot: JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue,
       diffMetadata: (diffMetadata as Prisma.InputJsonValue) ?? undefined,
       createdBy: userId,
     },
