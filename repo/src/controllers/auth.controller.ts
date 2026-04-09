@@ -1,13 +1,14 @@
 import { Request, Response, NextFunction } from 'express';
 import * as authService from '../services/auth.service';
-import { logAction } from '../services/audit.service';
-import { getTraceId } from '../utils/logger';
+import { audit, logAction } from '../services/audit.service';
+import { getRequestId } from '../utils/logger';
 
 export async function registerHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const { username, password, securityQuestions } = req.body;
     const result = await authService.register(username, password, securityQuestions);
-    logAction(result.id, 'user.register', 'user', result.id, { username }, getTraceId()).catch(() => {});
+    // Self-registration: actor IS the new user, so we use logAction directly.
+    logAction(result.id, 'user.register', 'user', result.id, { username }, getRequestId()).catch(() => {});
     res.status(201).json(result);
   } catch (err) {
     next(err);
@@ -25,7 +26,7 @@ export async function loginHandler(req: Request, res: Response, next: NextFuncti
       return;
     }
 
-    logAction(result.user.id, 'user.login', 'user', result.user.id, { username }, getTraceId()).catch(() => {});
+    logAction(result.user.id, 'user.login', 'user', result.user.id, { username }, getRequestId()).catch(() => {});
     res.status(200).json({
       accessToken: result.tokens.accessToken,
       refreshToken: result.tokens.refreshToken,
@@ -50,7 +51,7 @@ export async function logoutHandler(req: Request, res: Response, next: NextFunct
   try {
     const { refreshToken } = req.body;
     await authService.logout(refreshToken);
-    logAction(req.user!.userId, 'user.logout', 'user', req.user!.userId, {}, getTraceId()).catch(() => {});
+    audit(req, 'user.logout', 'user', req.user!.userId);
     res.status(204).send();
   } catch (err) {
     next(err);
@@ -61,7 +62,7 @@ export async function changePasswordHandler(req: Request, res: Response, next: N
   try {
     const { currentPassword, newPassword } = req.body;
     await authService.changePassword(req.user!.userId, currentPassword, newPassword);
-    logAction(req.user!.userId, 'user.change_password', 'user', req.user!.userId, {}, getTraceId()).catch(() => {});
+    audit(req, 'user.change_password', 'user', req.user!.userId);
     res.status(200).json({ message: 'Password changed successfully' });
   } catch (err) {
     next(err);
@@ -99,7 +100,7 @@ export async function getDevicesHandler(req: Request, res: Response, next: NextF
 export async function removeDeviceHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     await authService.removeDevice(req.user!.userId, req.params.id as string);
-    logAction(req.user!.userId, 'device.remove', 'device', req.params.id as string, {}, getTraceId()).catch(() => {});
+    audit(req, 'device.remove', 'device', req.params.id as string);
     res.status(204).send();
   } catch (err) {
     next(err);

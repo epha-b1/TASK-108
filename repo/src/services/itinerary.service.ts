@@ -174,9 +174,11 @@ async function createVersion(itineraryId: string, userId: string) {
     // tracked in snapshot but not in the diff so a status-only PATCH is a no-op.
     const metadataChanges: MetadataDiff[] = [];
     if (prev.schemaVersion >= 2) {
+      const prevMeta = prev.metadata as unknown as Record<string, unknown>;
+      const curMeta = snapshot.metadata as unknown as Record<string, unknown>;
       for (const field of VERSIONED_METADATA_FIELDS) {
-        const before = (prev.metadata as Record<string, unknown>)[field];
-        const after = (snapshot.metadata as Record<string, unknown>)[field];
+        const before = prevMeta[field];
+        const after = curMeta[field];
         if (before !== after) {
           metadataChanges.push({ field, from: before ?? null, to: after ?? null });
         }

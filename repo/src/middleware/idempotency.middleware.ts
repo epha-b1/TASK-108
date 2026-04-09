@@ -3,10 +3,21 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { getPrisma } from '../config/database';
 import { Prisma } from '../models/prisma';
-import { logger } from '../utils/logger';
+import { logger, getRequestId } from '../utils/logger';
 import { IDEMPOTENCY_CONFLICT, UNAUTHORIZED } from '../utils/errors';
 import { env } from '../config/environment';
 import { authConfig } from '../config/auth';
+
+/**
+ * Build the canonical error envelope. The middleware writes responses
+ * directly (rather than throwing AppError) because some of these branches
+ * happen before the route handler is reached, but we still need to honour
+ * the requestId/X-Request-Id contract that envelope.api.spec.ts asserts on.
+ */
+function envelope(statusCode: number, code: string, message: string) {
+  const requestId = getRequestId();
+  return { statusCode, code, message, requestId, traceId: requestId };
+}
 
 const MUTATING_METHODS = new Set(['POST', 'PATCH', 'DELETE']);
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -90,11 +101,9 @@ export async function idempotencyMiddleware(
 
   const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
   if (!idempotencyKey) {
-    res.status(400).json({
-      statusCode: 400,
-      code: 'MISSING_IDEMPOTENCY_KEY',
-      message: 'Idempotency-Key header is required for mutating operations',
-    });
+    res.status(400).json(
+      envelope(400, 'MISSING_IDEMPOTENCY_KEY', 'Idempotency-Key header is required for mutating operations'),
+    );
     return;
   }
 
@@ -125,11 +134,7 @@ export async function idempotencyMiddleware(
           // routes also use this middleware; for those a missing token is
           // fine, but if the cache is bound to an authenticated identity we
           // know we're on a protected route.)
-          res.status(401).json({
-            statusCode: 401,
-            code: UNAUTHORIZED,
-            message: 'Authentication required',
-          });
+          res.status(401).json(envelope(401, UNAUTHORIZED, 'Authentication required'));
           return;
         }
         // Different verified user: don't replay, don't overwrite. Let the
@@ -139,11 +144,9 @@ export async function idempotencyMiddleware(
       }
 
       if (storedFingerprint && storedFingerprint !== fingerprint) {
-        res.status(409).json({
-          statusCode: 409,
-          code: IDEMPOTENCY_CONFLICT,
-          message: 'Idempotency key already used with different request parameters',
-        });
+        res.status(409).json(
+          envelope(409, IDEMPOTENCY_CONFLICT, 'Idempotency key already used with different request parameters'),
+        );
         return;
       }
 

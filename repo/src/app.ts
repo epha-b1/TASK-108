@@ -30,6 +30,14 @@ app.get('/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Test-only safe trigger for the 500 error envelope path. Disabled outside
+// NODE_ENV=test so it can never be reached in production.
+if (process.env.NODE_ENV === 'test') {
+  app.get('/__test__/boom', (_req: Request, _res: Response, next: NextFunction) => {
+    next(new Error('synthetic test failure for envelope assertions'));
+  });
+}
+
 app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(apiSpec));
 
 app.use('/auth', authRoutes);

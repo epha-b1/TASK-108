@@ -114,3 +114,107 @@ describe('GET /audit-logs/export', () => {
     }
   });
 });
+
+// === Audit completeness for representative critical mutations ===
+// For each protected mutating endpoint we now add a centralised audit() call.
+// These tests prove the row actually lands in audit_logs by querying it back
+// through GET /audit-logs.
+describe('Audit completeness — critical mutations', () => {
+  async function findAuditAction(action: string): Promise<{ action: string; detail: Record<string, unknown> } | null> {
+    // Search recent rows; the API filter doesn't accept just `action` as a
+    // free-form string in the way that maps to our records cleanly across
+    // implementations, so we paginate the latest 50 and grep client-side.
+    const res = await request(app)
+      .get('/audit-logs?limit=100')
+      .set('Authorization', `Bearer ${adminToken}`);
+    if (res.status !== 200) return null;
+    return (
+      (res.body.data ?? []).find(
+        (row: { action: string }) => row.action === action,
+      ) ?? null
+    );
+  }
+
+  it('resource.create lands in audit_logs after POST /resources', async () => {
+    const create = await request(app)
+      .post('/resources')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ name: `Audit Res ${ts}`, type: 'attraction', city: 'TestCity' });
+    expect(create.status).toBe(201);
+
+    const row = await findAuditAction('resource.create');
+    expect(row).not.toBeNull();
+    expect((row!.detail as { resourceType: string }).resourceType).toBe('resource');
+
+    // cleanup
+    await prisma.resource.delete({ where: { id: create.body.id } }).catch(() => {});
+  });
+
+  it('notification.template.create lands in audit_logs', async () => {
+    const code = `audit_template_${ts}`;
+    const create = await request(app)
+      .post('/notification-templates')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ code, subject: 'S', body: 'Hello {{name}}' });
+    expect(create.status).toBe(201);
+
+    const row = await findAuditAction('notification.template.create');
+    expect(row).not.toBeNull();
+
+    await prisma.notificationTemplate.delete({ where: { id: create.body.id } }).catch(() => {});
+  });
+
+  it('model.register lands in audit_logs', async () => {
+    const create = await request(app)
+      .post('/models')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ name: `audit_model_${ts}`, version: '1.0.0', type: 'pmml' });
+    expect(create.status).toBe(201);
+
+    const row = await findAuditAction('model.register');
+    expect(row).not.toBeNull();
+
+    await prisma.mlModel.delete({ where: { id: create.body.id } }).catch(() => {});
+  });
+});
+
+// === Audit immutability ===
+// audit_logs is append-only at the database layer. Triggers installed by the
+// 20260409000000_audit_immutability migration raise SQLSTATE 45000 on any
+// UPDATE or DELETE attempt. We exercise both via raw SQL through Prisma.
+describe('Audit immutability — DB-level enforcement', () => {
+  it('UPDATE on audit_logs is rejected by trigger', async () => {
+    // Trigger a write so there's at least one row
+    await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send(adminCreds);
+    const row = await prisma.auditLog.findFirst({ orderBy: { createdAt: 'desc' } });
+    expect(row).not.toBeNull();
+
+    let threw = false;
+    try {
+      await prisma.$executeRawUnsafe(
+        `UPDATE audit_logs SET action = 'tampered' WHERE id = '${row!.id}'`,
+      );
+    } catch (err) {
+      threw = true;
+      expect(String((err as Error).message)).toMatch(/append-only|forbidden|45000/i);
+    }
+    expect(threw).toBe(true);
+  });
+
+  it('DELETE on audit_logs is rejected by trigger', async () => {
+    const row = await prisma.auditLog.findFirst({ orderBy: { createdAt: 'desc' } });
+    expect(row).not.toBeNull();
+
+    let threw = false;
+    try {
+      await prisma.$executeRawUnsafe(`DELETE FROM audit_logs WHERE id = '${row!.id}'`);
+    } catch (err) {
+      threw = true;
+      expect(String((err as Error).message)).toMatch(/append-only|forbidden|45000/i);
+    }
+    expect(threw).toBe(true);
+  });
+});

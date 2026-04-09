@@ -419,13 +419,29 @@ POST /auth/refresh {refreshToken}
 - Passwords: bcrypt rounds=12, min 12 chars, complexity enforced, last 5 reuse blocked
 - JWT: HS256, access token 30 min, refresh token 14 days, secret from env
 - Field encryption: AES-256-GCM for security question answers, sensitive notes
-- Audit log: INSERT-only for app DB role, no UPDATE/DELETE
-- Account lockout: 10 failed attempts in 15 min → locked
+- Audit log: append-only at the database layer (`audit_logs_no_update` and
+  `audit_logs_no_delete` triggers raise `SQLSTATE 45000` on any UPDATE or
+  DELETE attempt — see migration `20260409000000_audit_immutability`).
+- Account lockout: 10 failed attempts in rolling 15 min → locked for 15 min
 - Device limit: max 5 active devices per user
-- Unusual location: challenge prompt if city differs from last known
-- Idempotency keys: stored 24 hours, globally unique per operation type
-- Sensitive fields masked in audit log exports
-- Request IDs: UUID per request, attached to all log lines and `X-Request-Id` header
+- Unusual location: challenge prompt if city differs from last known device city
+- Idempotency keys: stored 24 hours, fingerprinted by (verified actor, method, route, body hash). Forged bearer tokens cannot replay another user's cached response.
+- Sensitive fields masked in audit log exports (bcrypt hashes, encrypted answers, token hashes)
+- Request IDs: UUID per request, canonical field name is `requestId`, exposed via `X-Request-Id` response header on every response (success and error). The legacy `traceId` body field and `X-Trace-Id` header are kept temporarily as backwards-compatible aliases.
+
+### Secret quality requirements
+
+The server's environment loader (`src/config/environment.ts`) refuses to start
+if any of the following are missing or weak in non-test runtimes:
+
+- `JWT_SECRET` — at least 32 characters; rejects known placeholder values.
+- `ENCRYPTION_KEY` — exactly 32 characters; rejects known placeholder values.
+- `DATABASE_URL` — required.
+
+There are no hardcoded fallback secrets anywhere in the runtime. Test
+runtimes (`NODE_ENV=test`) accept deterministic defaults so the unit/API
+suites can run without per-shell setup; those defaults are clearly marked
+as test-only constants and never reach production paths.
 
 ---
 
@@ -444,21 +460,78 @@ POST /auth/refresh {refreshToken}
 
 ## 9. Error Handling
 
-All errors return:
+All non-2xx responses follow the canonical envelope:
+
 ```json
 {
   "statusCode": 400,
   "code": "VALIDATION_ERROR",
   "message": "human readable message",
-  "requestId": "uuid"
+  "requestId": "11111111-2222-3333-4444-555555555555",
+  "details": { "...": "optional structured context" }
 }
 ```
 
-Standard codes: VALIDATION_ERROR (400), UNAUTHORIZED (401), FORBIDDEN (403), NOT_FOUND (404), CONFLICT (409), IDEMPOTENCY_CONFLICT (409), RATE_LIMITED (429), INTERNAL_ERROR (500)
+Rules:
+
+- `requestId` is the canonical correlation field. It always equals the
+  `X-Request-Id` response header for the same request.
+- A client may supply `X-Request-Id` (or the legacy `X-Trace-Id`) on the
+  request; the server echoes that exact value back instead of generating a
+  fresh one. This applies to both success and error responses.
+- The body field `traceId` and the response header `X-Trace-Id` are kept as
+  backwards-compatible aliases for existing clients. New integrations should
+  use `requestId` only.
+
+Standard codes: `VALIDATION_ERROR` (400), `UNAUTHORIZED` (401), `FORBIDDEN`
+(403), `NOT_FOUND` (404), `CONFLICT` (409), `IDEMPOTENCY_CONFLICT` (409),
+`RATE_LIMITED` (429), `DEVICE_LIMIT_REACHED` (409), `ACCOUNT_LOCKED` (423),
+`INTERNAL_ERROR` (500).
+
+Coverage of the envelope across status codes is asserted by
+`API_tests/envelope.api.spec.ts`.
 
 ---
 
-## 10. Docker Setup
+## 10. Deployment
+
+TripForge has two officially supported deployment topologies:
+
+### 10.1 Single-container (acceptance)
+
+The acceptance artifact is one Docker image that bundles the API, a local
+MariaDB instance, and the entrypoint that wires them together. This is what
+the requirements call a "single Docker container deployable".
+
+```bash
+docker build -t tripforge .
+
+docker run --rm -p 3000:3000 \
+  -e JWT_SECRET=$(openssl rand -hex 32) \
+  -e ENCRYPTION_KEY=$(openssl rand -base64 24 | cut -c1-32) \
+  -v tripforge_data:/var/lib/mysql \
+  tripforge
+```
+
+`docker/entrypoint.sh` performs:
+
+1. Validate `JWT_SECRET` (>=32 chars) and `ENCRYPTION_KEY` (exactly 32 chars). Refuse to start otherwise.
+2. Initialise `/var/lib/mysql` on first boot. Auto-generate a strong local DB password (persisted in the data dir, never leaves the container).
+3. Start `mariadbd` bound to `127.0.0.1`, wait until it accepts connections.
+4. Bootstrap the application database/user.
+5. Run `prisma migrate deploy` (which installs the audit immutability triggers).
+6. `exec node dist/server.js`.
+
+The API server's own environment loader runs the same secret-quality checks
+again before opening port 3000, so misconfiguration cannot leak past the
+entrypoint.
+
+### 10.2 Compose (development)
+
+Compose runs API and MySQL as separate services and is intended for local
+development. It uses env interpolation with `?` defaults, so it refuses to
+start if any required secret is missing — there are no hardcoded credentials
+in `docker-compose.yml`.
 
 ```yaml
 services:
@@ -467,24 +540,25 @@ services:
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: mysql://tripforge:tripforge@db:3306/tripforge
-      JWT_SECRET: ${JWT_SECRET}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value (>=32 chars)}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set to a 32-character random value}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1800}
+      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-1209600}
+      PORT: ${PORT:-3000}
+      NODE_ENV: ${NODE_ENV:-production}
     depends_on:
       db:
         condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && node dist/server.js"
 
   db:
     image: mysql:8
     environment:
-      MYSQL_USER: tripforge
-      MYSQL_PASSWORD: tripforge
-      MYSQL_DATABASE: tripforge
-      MYSQL_ROOT_PASSWORD: rootpassword
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 5s
-      retries: 10
+      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER must be set}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set to a strong value}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tripforge}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set to a strong value}
     volumes:
       - mysqldata:/var/lib/mysql
 

@@ -1,154 +1,233 @@
+/**
+ * Cross-cutting acceptance tests against REAL service code.
+ *
+ * Replaces the previous file which mostly asserted properties of locally-
+ * declared constants and helpers. Each test here exercises a real service
+ * function or middleware via the in-memory Prisma mock at
+ * src/__mocks__/prisma.ts so behaviour drift in the real code surfaces here
+ * instead of being missed by parallel logic copies.
+ */
+
 import { v4 as uuid } from 'uuid';
-import crypto from 'crypto';
+import * as authService from '../src/services/auth.service';
+import * as modelService from '../src/services/model.service';
+import * as notificationService from '../src/services/notification.service';
+import * as importService from '../src/services/import.service';
+import { getPrisma } from '../src/config/database';
 
-// A) Challenge flow logic
-describe('Unusual-location challenge flow', () => {
-  it('challenge token TTL is 5 minutes', () => {
-    const ttl = 5 * 60 * 1000;
-    const expires = new Date(Date.now() + ttl);
-    expect(expires.getTime() - Date.now()).toBeLessThanOrEqual(ttl + 10);
-    expect(expires.getTime() - Date.now()).toBeGreaterThan(ttl - 100);
-  });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const prisma = getPrisma() as any;
 
-  it('rate limit max 3 per hour', () => {
-    const MAX = 3;
-    expect([1,2,3].every(n => n <= MAX)).toBe(true);
-    expect(4 <= MAX).toBe(false);
-  });
-});
-
-// B) Device cap
-describe('Device cap contract', () => {
-  it('max 5 devices enforced', () => {
-    const MAX_DEVICES = 5;
-    expect(MAX_DEVICES).toBe(5);
-    expect(6 > MAX_DEVICES).toBe(true);
-  });
-});
-
-// C) Idempotency
-describe('Idempotency enforcement', () => {
-  it('fingerprint includes actor identity', () => {
-    const fp1 = crypto.createHash('sha256').update('user1:POST:/resources:hash1').digest('hex');
-    const fp2 = crypto.createHash('sha256').update('user2:POST:/resources:hash1').digest('hex');
-    expect(fp1).not.toBe(fp2);
-  });
-
-  it('same inputs produce same fingerprint', () => {
-    const fp1 = crypto.createHash('sha256').update('user1:POST:/resources:hash1').digest('hex');
-    const fp2 = crypto.createHash('sha256').update('user1:POST:/resources:hash1').digest('hex');
-    expect(fp1).toBe(fp2);
-  });
-
-  it('different payload produces different fingerprint', () => {
-    const fp1 = crypto.createHash('sha256').update('user1:POST:/resources:hashA').digest('hex');
-    const fp2 = crypto.createHash('sha256').update('user1:POST:/resources:hashB').digest('hex');
-    expect(fp1).not.toBe(fp2);
-  });
-});
-
-// D) Itinerary conflict helpers
-describe('Itinerary time helpers', () => {
-  function timeToMinutes(t: string): number {
-    const [h, m] = t.split(':').map(Number);
-    return h * 60 + m;
+function reset() {
+  for (const model of Object.values(prisma)) {
+    if (typeof model !== 'object' || model === null) continue;
+    for (const fn of Object.values(model as Record<string, unknown>)) {
+      if (typeof (fn as jest.Mock)?.mockReset === 'function') (fn as jest.Mock).mockReset();
+    }
   }
+}
 
-  it('business hours check: item outside hours is violation', () => {
-    const itemStart = timeToMinutes('07:00');
-    const itemEnd = timeToMinutes('08:00');
-    const openTime = timeToMinutes('09:00');
-    const closeTime = timeToMinutes('18:00');
-    expect(itemStart < openTime || itemEnd > closeTime).toBe(true);
+beforeEach(() => reset());
+
+// ----------------------------------------------------------------------------
+// A) Auth — token round-trip uses the real signer/verifier
+// ----------------------------------------------------------------------------
+describe('auth.service — JWT round-trip', () => {
+  it('signAccessToken + verifyAccessToken returns the original payload', () => {
+    const token = authService.signAccessToken({
+      userId: 'u-1',
+      username: 'alice',
+      role: 'organizer',
+    });
+    const payload = authService.verifyAccessToken(token);
+    expect(payload.userId).toBe('u-1');
+    expect(payload.username).toBe('alice');
+    expect(payload.role).toBe('organizer');
   });
 
-  it('closure check: item on closed date is violation', () => {
-    const itemDate = '2026-07-04';
-    const closures = ['2026-07-04', '2026-12-25'];
-    expect(closures.includes(itemDate)).toBe(true);
-  });
-
-  it('travel time check: insufficient gap is violation', () => {
-    const prevEnd = timeToMinutes('10:00');
-    const nextStart = timeToMinutes('10:10');
-    const travelMinutes = 15;
-    const gap = nextStart - prevEnd;
-    expect(gap < travelMinutes).toBe(true);
-  });
-
-  it('status-only update should not create version', () => {
-    const contentFields = ['title', 'destination', 'startDate', 'endDate'];
-    const updatePayload = { status: 'published' };
-    const hasContentChange = contentFields.some(f => f in updatePayload);
-    expect(hasContentChange).toBe(false);
+  it('verifyAccessToken throws AppError on a forged token', () => {
+    expect(() => authService.verifyAccessToken('not-a-jwt')).toThrow();
   });
 });
 
-// E) Model A/B determinism
-describe('Model canary/A-B determinism', () => {
-  function allocationHash(userId: string, modelName: string): number {
-    const hash = crypto.createHash('sha256').update(`${userId}:${modelName}`).digest();
-    return hash.readUInt32BE(0) % 100;
-  }
+// ----------------------------------------------------------------------------
+// B) Auth — device cap returns 409 with the existing device list
+// ----------------------------------------------------------------------------
+describe('auth.service.login — device cap contract', () => {
+  it('returns 409 DEVICE_LIMIT_REACHED with the device list as `details`', async () => {
+    // Use a precomputed bcrypt hash for "Pass1234567!"
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const bcrypt = require('bcryptjs');
+    const passwordHash = await bcrypt.hash('Pass1234567!', 4);
 
-  it('same userId+modelName always produces same bucket', () => {
-    const b1 = allocationHash('user1', 'modelA');
-    const b2 = allocationHash('user1', 'modelA');
-    expect(b1).toBe(b2);
-  });
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u-1',
+      username: 'alice',
+      passwordHash,
+      role: 'organizer',
+      status: 'active',
+      lockedUntil: null,
+    });
+    prisma.loginAttempt.create.mockResolvedValue({});
+    prisma.device.findUnique.mockResolvedValue(null); // no matching device → counts as new
+    prisma.device.count.mockResolvedValue(5); // already at the cap
+    prisma.device.findMany.mockResolvedValue([
+      { id: 'd1', lastSeenAt: new Date(), lastKnownCity: null, createdAt: new Date() },
+      { id: 'd2', lastSeenAt: new Date(), lastKnownCity: null, createdAt: new Date() },
+      { id: 'd3', lastSeenAt: new Date(), lastKnownCity: null, createdAt: new Date() },
+      { id: 'd4', lastSeenAt: new Date(), lastKnownCity: null, createdAt: new Date() },
+      { id: 'd5', lastSeenAt: new Date(), lastKnownCity: null, createdAt: new Date() },
+    ]);
 
-  it('different users get different buckets', () => {
-    const b1 = allocationHash('user1', 'modelA');
-    const b2 = allocationHash('user2', 'modelA');
-    // They could collide but extremely unlikely with sha256
-    expect(typeof b1).toBe('number');
-    expect(typeof b2).toBe('number');
-    expect(b1 >= 0 && b1 < 100).toBe(true);
-  });
-
-  it('rule override takes precedence over model output', () => {
-    const modelPrediction = 0.8;
-    const ruleTriggered = true;
-    const ruleOutput = 0.1;
-    const finalPrediction = ruleTriggered ? ruleOutput : modelPrediction;
-    expect(finalPrediction).toBe(0.1);
-  });
-});
-
-// F) Notification resilience
-describe('Notification resilience', () => {
-  it('blacklisted user cannot receive notifications', () => {
-    const settings = { blacklisted: true, dailyCap: 20, dailySent: 0 };
-    expect(settings.blacklisted).toBe(true);
-  });
-
-  it('exponential backoff: 30s * 2^(n-1)', () => {
-    expect(30000 * Math.pow(2, 0)).toBe(30000);  // attempt 1
-    expect(30000 * Math.pow(2, 1)).toBe(60000);  // attempt 2
-    expect(30000 * Math.pow(2, 2)).toBe(120000); // attempt 3
-  });
-
-  it('max 3 attempts then failed', () => {
-    const MAX = 3;
-    expect(3 >= MAX).toBe(true);
-  });
-
-  it('daily cap blocks when reached', () => {
-    const settings = { dailyCap: 20, dailySent: 20 };
-    expect(settings.dailySent >= settings.dailyCap).toBe(true);
-  });
-
-  it('daily reset clears sent count', () => {
-    let dailySent = 15;
-    dailySent = 0; // reset
-    expect(dailySent).toBe(0);
+    await expect(
+      authService.login('alice', 'Pass1234567!', 'fp-new'),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DEVICE_LIMIT_REACHED',
+      details: expect.objectContaining({ devices: expect.any(Array) }),
+    });
   });
 });
 
-// G) Adapter mode
-describe('Model adapter mode safety', () => {
-  it('defaults to mock in non-production', () => {
-    const mode = process.env.MODEL_ADAPTER_MODE || (process.env.NODE_ENV === 'production' ? 'process' : 'mock');
-    expect(mode).toBe('mock'); // test env
+// ----------------------------------------------------------------------------
+// C) Auth — unusual-location challenge issues a token + per-attempt key
+// ----------------------------------------------------------------------------
+describe('auth.service.login — unusual-location challenge', () => {
+  it('returns a challengeToken when lastKnownCity changes for an existing device', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const bcrypt = require('bcryptjs');
+    const passwordHash = await bcrypt.hash('Pass1234567!', 4);
+
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u-1',
+      username: 'alice',
+      passwordHash,
+      role: 'organizer',
+      status: 'active',
+      lockedUntil: null,
+    });
+    prisma.loginAttempt.create.mockResolvedValue({});
+    prisma.device.findUnique.mockResolvedValue({
+      id: 'd-1',
+      userId: 'u-1',
+      lastKnownCity: 'Paris',
+    });
+    prisma.idempotencyKey.findMany.mockResolvedValue([]); // 0 prior challenges
+    prisma.idempotencyKey.create.mockResolvedValue({});
+
+    const result = await authService.login('alice', 'Pass1234567!', 'fp-1', 'Tokyo');
+    expect(result).toMatchObject({
+      challengeToken: expect.any(String),
+      retryAfterSeconds: 300,
+    });
+    // Per-attempt key was created with the location_challenge operation type.
+    expect(prisma.idempotencyKey.create).toHaveBeenCalled();
+    const createArgs = prisma.idempotencyKey.create.mock.calls[0][0].data;
+    expect(createArgs.operationType).toBe('location_challenge');
+  });
+});
+
+// ----------------------------------------------------------------------------
+// D) Model service — A/B routing is deterministic on (userId, modelName)
+// ----------------------------------------------------------------------------
+describe('model.service.infer — adapter falls back to mock in test', () => {
+  it('returns a deterministic mock inference shape', async () => {
+    prisma.mlModel.findUnique.mockResolvedValue({
+      id: 'm-1',
+      name: 'm',
+      version: '1.0.0',
+      type: 'pmml',
+      status: 'active',
+      config: null,
+      abAllocations: [],
+    });
+    prisma.mlModel.findFirst.mockResolvedValue(null); // no canary
+
+    const out = await modelService.infer('m-1', { budget: 100, nights: 3 }, {}, 'u-1');
+    expect(typeof out.prediction).toBe('number');
+    expect(typeof out.confidence).toBe('number');
+    expect(Array.isArray(out.confidenceBand)).toBe(true);
+    expect(out.confidenceBand.length).toBe(2);
+    expect(Array.isArray(out.topFeatures)).toBe(true);
+  });
+
+  it('rejects inference on inactive models with VALIDATION_ERROR', async () => {
+    prisma.mlModel.findUnique.mockResolvedValue({
+      id: 'm-1',
+      name: 'm',
+      version: '1.0.0',
+      type: 'pmml',
+      status: 'inactive',
+      config: null,
+      abAllocations: [],
+    });
+    prisma.mlModel.findFirst.mockResolvedValue(null);
+
+    await expect(
+      modelService.infer('m-1', { budget: 1 }, {}),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'VALIDATION_ERROR' });
+  });
+});
+
+// ----------------------------------------------------------------------------
+// E) Notification — blacklist + daily cap blocking
+// ----------------------------------------------------------------------------
+describe('notification.service.sendNotification — guards', () => {
+  it('blocks blacklisted users with 403 FORBIDDEN', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 'u-1' });
+    prisma.userNotificationSetting.findUnique.mockResolvedValue({
+      userId: 'u-1',
+      blacklisted: true,
+      dailyCap: 20,
+      dailySent: 0,
+    });
+
+    await expect(
+      notificationService.sendNotification('u-1', 'info', undefined, undefined, 'S', 'M'),
+    ).rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
+  });
+
+  it('blocks users at the daily cap with 429 RATE_LIMITED', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 'u-1' });
+    prisma.userNotificationSetting.findUnique.mockResolvedValue({
+      userId: 'u-1',
+      blacklisted: false,
+      dailyCap: 5,
+      dailySent: 5,
+    });
+
+    await expect(
+      notificationService.sendNotification('u-1', 'info', undefined, undefined, 'S', 'M'),
+    ).rejects.toMatchObject({ statusCode: 429, code: 'RATE_LIMITED' });
+  });
+});
+
+// ----------------------------------------------------------------------------
+// F) Import — idempotency-key replay returns the existing batch
+// ----------------------------------------------------------------------------
+describe('import.service.uploadAndValidate — idempotency replay', () => {
+  it('returns the existing batch (no new create) when the key was used before', async () => {
+    const cached = { id: 'cached', errors: [] };
+    prisma.importBatch.findUnique.mockResolvedValue(cached);
+
+    const result = await importService.uploadAndValidate(
+      'u-1',
+      { buffer: Buffer.from('name,type\nA,attraction\n'), originalname: 'x.csv' },
+      'resources',
+      'replay-key',
+    );
+
+    expect(result).toBe(cached);
+    expect(prisma.importBatch.create).not.toHaveBeenCalled();
+  });
+});
+
+// ----------------------------------------------------------------------------
+// G) Misc — uuid module is wired in (sanity)
+// ----------------------------------------------------------------------------
+describe('uuid sanity', () => {
+  it('uuid() returns a v4-shaped string', () => {
+    const id = uuid();
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 });

@@ -16,11 +16,11 @@ export class PrismaClient {
   menuPermissionPoint = { createMany: jest.fn(), deleteMany: jest.fn() };
   rolePermissionPoint = { createMany: jest.fn(), deleteMany: jest.fn() };
   userRole = { create: jest.fn(), createMany: jest.fn(), findMany: jest.fn(), deleteMany: jest.fn(), upsert: jest.fn() };
-  resource = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), count: jest.fn() };
+  resource = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), deleteMany: jest.fn(), count: jest.fn() };
   resourceHour = { create: jest.fn(), findMany: jest.fn(), deleteMany: jest.fn() };
   resourceClosure = { create: jest.fn(), findMany: jest.fn(), deleteMany: jest.fn() };
   travelTimeMatrix = { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), upsert: jest.fn(), deleteMany: jest.fn() };
-  itinerary = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), count: jest.fn() };
+  itinerary = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), deleteMany: jest.fn(), count: jest.fn() };
   itineraryVersion = { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), count: jest.fn() };
   itineraryItem = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), deleteMany: jest.fn() };
   importBatch = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() };

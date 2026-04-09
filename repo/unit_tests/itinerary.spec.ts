@@ -1,222 +1,397 @@
 /**
- * Unit tests for itinerary conflict validation logic.
+ * Unit tests for the itinerary service.
  *
- * These tests validate the pure logic used in itinerary item scheduling:
- * time conversion, overlap detection, buffer enforcement, and dwell time checks.
+ * These exercise the REAL functions in src/services/itinerary.service.ts via
+ * the in-memory Prisma mock at src/__mocks__/prisma.ts. The previous version
+ * of this file replicated the validation helpers locally and tested those
+ * copies — that gave green CI even when the real service drifted away from
+ * the spec, which is exactly the failure mode the audit flagged.
+ *
+ * What we cover:
+ *   - validateItem business rules (overlap, buffer, dwell, hours, closure,
+ *     travel time) via addItem.
+ *   - createVersion snapshot fidelity: metadata + items both present and
+ *     diff metadata reports both kinds of change.
+ *   - status-only PATCH does NOT cut a version, content PATCH does.
+ *
+ * Where the service does ownership / role checks we pass an "admin" role so
+ * the test stays focused on the business logic and not authz wiring.
  */
 
-describe('timeToMinutes conversion', () => {
-  // Replicate the helper from itinerary.service.ts
-  function timeToMinutes(time: string): number {
-    const [h, m] = time.split(':').map(Number);
-    return h * 60 + m;
-  }
+import * as itineraryService from '../src/services/itinerary.service';
+import { getPrisma } from '../src/config/database';
 
-  it('"09:00" = 540 minutes', () => {
-    expect(timeToMinutes('09:00')).toBe(540);
-  });
+const prisma = getPrisma() as unknown as Record<string, Record<string, jest.Mock>>;
 
-  it('"14:30" = 870 minutes', () => {
-    expect(timeToMinutes('14:30')).toBe(870);
-  });
-
-  it('"00:00" = 0 minutes', () => {
-    expect(timeToMinutes('00:00')).toBe(0);
-  });
-
-  it('"23:59" = 1439 minutes', () => {
-    expect(timeToMinutes('23:59')).toBe(1439);
-  });
-
-  it('"12:00" = 720 minutes (noon)', () => {
-    expect(timeToMinutes('12:00')).toBe(720);
-  });
-});
-
-describe('Overlap detection', () => {
-  function timeToMinutes(time: string): number {
-    const [h, m] = time.split(':').map(Number);
-    return h * 60 + m;
-  }
-
-  function hasOverlap(
-    newStart: string,
-    newEnd: string,
-    existingStart: string,
-    existingEnd: string,
-  ): boolean {
-    const startMin = timeToMinutes(newStart);
-    const endMin = timeToMinutes(newEnd);
-    const existStart = timeToMinutes(existingStart);
-    const existEnd = timeToMinutes(existingEnd);
-    return startMin < existEnd && endMin > existStart;
-  }
-
-  it('detects overlap when two items on the same day overlap', () => {
-    // Existing: 09:00-10:00, New: 09:30-10:30
-    expect(hasOverlap('09:30', '10:30', '09:00', '10:00')).toBe(true);
-  });
-
-  it('detects overlap when new item completely inside existing', () => {
-    // Existing: 09:00-12:00, New: 10:00-11:00
-    expect(hasOverlap('10:00', '11:00', '09:00', '12:00')).toBe(true);
-  });
-
-  it('detects overlap when existing item completely inside new', () => {
-    // Existing: 10:00-11:00, New: 09:00-12:00
-    expect(hasOverlap('09:00', '12:00', '10:00', '11:00')).toBe(true);
-  });
-
-  it('no overlap when items are adjacent (end == start)', () => {
-    // Existing: 09:00-10:00, New: 10:00-11:00
-    expect(hasOverlap('10:00', '11:00', '09:00', '10:00')).toBe(false);
-  });
-
-  it('no overlap when items are well-separated', () => {
-    // Existing: 09:00-10:00, New: 14:00-15:00
-    expect(hasOverlap('14:00', '15:00', '09:00', '10:00')).toBe(false);
-  });
-});
-
-describe('15-minute buffer enforcement', () => {
-  function timeToMinutes(time: string): number {
-    const [h, m] = time.split(':').map(Number);
-    return h * 60 + m;
-  }
-
-  function violatesBuffer(
-    newStart: string,
-    newEnd: string,
-    existingStart: string,
-    existingEnd: string,
-    bufferMinutes: number = 15,
-  ): boolean {
-    const startMin = timeToMinutes(newStart);
-    const endMin = timeToMinutes(newEnd);
-    const existStart = timeToMinutes(existingStart);
-    const existEnd = timeToMinutes(existingEnd);
-
-    // First check: no direct overlap
-    if (startMin < existEnd && endMin > existStart) {
-      return false; // This is overlap, not buffer violation
+function reset() {
+  for (const model of Object.values(prisma)) {
+    if (typeof model !== 'object' || model === null) continue;
+    for (const fn of Object.values(model)) {
+      if (typeof (fn as jest.Mock).mockReset === 'function') (fn as jest.Mock).mockReset();
     }
-
-    // Buffer check: new item starts too soon after existing ends
-    if (startMin >= existEnd && startMin < existEnd + bufferMinutes) {
-      return true;
-    }
-
-    // Buffer check: new item ends too close before existing starts
-    if (endMin > existStart - bufferMinutes && endMin <= existStart) {
-      return true;
-    }
-
-    return false;
   }
+}
 
-  it('conflict when new item starts 5 minutes after existing ends', () => {
-    // Existing: 09:00-10:00, New: 10:05-11:00 (only 5 min gap, need 15)
-    expect(violatesBuffer('10:05', '11:00', '09:00', '10:00')).toBe(true);
+const FIXED_START = new Date('2026-06-01T00:00:00.000Z');
+
+function makeItinerary(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 'itin-1',
+    ownerId: 'user-1',
+    title: 'Trip',
+    destination: 'Paris',
+    startDate: FIXED_START,
+    endDate: new Date('2026-06-05T00:00:00.000Z'),
+    status: 'draft',
+    createdAt: FIXED_START,
+    updatedAt: FIXED_START,
+    ...overrides,
+  };
+}
+
+function makeResource(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: 'res-1',
+    name: 'Eiffel',
+    type: 'attraction',
+    minDwellMinutes: 30,
+    hours: [],
+    closures: [],
+    ...overrides,
+  };
+}
+
+beforeEach(() => reset());
+
+describe('itinerary.service.addItem — validateItem rules', () => {
+  it('rejects an item shorter than the resource min dwell time', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(makeResource({ minDwellMinutes: 60 }));
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue(null);
+
+    await expect(
+      itineraryService.addItem('itin-1', 'user-1', 'admin', {
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '09:00',
+        endTime: '09:30', // only 30 min, need 60
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: 'VALIDATION_ERROR',
+    });
   });
 
-  it('conflict when new item ends 5 minutes before existing starts', () => {
-    // Existing: 11:00-12:00, New: 09:55-10:55 (only 5 min gap before 11:00)
-    expect(violatesBuffer('09:55', '10:55', '11:00', '12:00')).toBe(true);
+  it('rejects when item time is outside the resource business hours', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(
+      makeResource({
+        hours: [
+          { id: 'h1', resourceId: 'res-1', dayOfWeek: 1, openTime: '09:00', closeTime: '17:00' },
+        ],
+      }),
+    );
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue(null);
+
+    // 2026-06-01 is a Monday (dayOfWeek=1), itinerary day 1 → that Monday.
+    await expect(
+      itineraryService.addItem('itin-1', 'user-1', 'admin', {
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '07:00',
+        endTime: '08:00',
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'VALIDATION_ERROR' });
   });
 
-  it('no conflict when items have exactly 15 minutes buffer', () => {
-    // Existing: 09:00-10:00, New: 10:15-11:00 (exactly 15 min gap)
-    expect(violatesBuffer('10:15', '11:00', '09:00', '10:00')).toBe(false);
+  it('rejects when the resource is closed on the actual date', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(
+      makeResource({
+        closures: [{ id: 'c1', resourceId: 'res-1', date: new Date('2026-06-01'), reason: 'Holiday' }],
+      }),
+    );
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue(null);
+
+    await expect(
+      itineraryService.addItem('itin-1', 'user-1', 'admin', {
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '10:00',
+        endTime: '11:00',
+      }),
+    ).rejects.toMatchObject({ statusCode: 400, code: 'VALIDATION_ERROR' });
   });
 
-  it('no conflict when items are well-spaced (30 min gap)', () => {
-    // Existing: 09:00-10:00, New: 10:30-11:30
-    expect(violatesBuffer('10:30', '11:30', '09:00', '10:00')).toBe(false);
+  it('rejects an item that overlaps an existing item on the same day', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(makeResource());
+    prisma.itineraryItem.findMany.mockResolvedValue([
+      {
+        id: 'it1',
+        itineraryId: 'itin-1',
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '09:00',
+        endTime: '10:00',
+        notes: null,
+        position: 0,
+        resource: makeResource(),
+      },
+    ]);
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue(null);
+
+    await expect(
+      itineraryService.addItem('itin-1', 'user-1', 'admin', {
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '09:30',
+        endTime: '10:30',
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
   });
-});
 
-describe('Min dwell time validation', () => {
-  function timeToMinutes(time: string): number {
-    const [h, m] = time.split(':').map(Number);
-    return h * 60 + m;
-  }
+  it('rejects items closer than the 15-minute buffer', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(makeResource());
+    prisma.itineraryItem.findMany.mockResolvedValue([
+      {
+        id: 'it1',
+        itineraryId: 'itin-1',
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '09:00',
+        endTime: '10:00',
+        notes: null,
+        position: 0,
+        resource: makeResource(),
+      },
+    ]);
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue(null);
 
-  function checkDwellTime(
-    startTime: string,
-    endTime: string,
-    minDwellMinutes: number,
-  ): { valid: boolean; duration: number } {
-    const duration = timeToMinutes(endTime) - timeToMinutes(startTime);
-    return {
-      valid: duration >= minDwellMinutes,
-      duration,
+    await expect(
+      itineraryService.addItem('itin-1', 'user-1', 'admin', {
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '10:05',
+        endTime: '11:00',
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
+  });
+
+  it('rejects when travel time from previous item exceeds the gap', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(makeResource());
+    prisma.itineraryItem.findMany.mockResolvedValue([
+      {
+        id: 'it1',
+        itineraryId: 'itin-1',
+        resourceId: 'res-9',
+        dayNumber: 1,
+        startTime: '09:00',
+        endTime: '10:00',
+        notes: null,
+        position: 0,
+        resource: makeResource({ id: 'res-9' }),
+      },
+    ]);
+    // 30-minute travel time but we're scheduling at 10:20 (only 20-minute gap).
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue({
+      id: 'tt1',
+      fromResourceId: 'res-9',
+      toResourceId: 'res-1',
+      transportMode: 'walking',
+      travelMinutes: 30,
+    });
+
+    await expect(
+      itineraryService.addItem('itin-1', 'user-1', 'admin', {
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '10:20',
+        endTime: '11:00',
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
+  });
+
+  it('accepts a well-spaced item and persists it via prisma.itineraryItem.create', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(makeResource());
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue(null);
+
+    const created = {
+      id: 'new-item',
+      itineraryId: 'itin-1',
+      resourceId: 'res-1',
+      dayNumber: 1,
+      startTime: '14:00',
+      endTime: '15:00',
+      notes: null,
+      position: 0,
+      resource: makeResource(),
     };
-  }
+    prisma.itineraryItem.create.mockResolvedValue(created);
+    // createVersion calls
+    prisma.itineraryVersion.findFirst.mockResolvedValue(null);
+    prisma.itineraryVersion.create.mockResolvedValue({ versionNumber: 1 });
 
-  it('violation when duration < resource.minDwellMinutes', () => {
-    // minDwell = 30, but only 15 min duration
-    const result = checkDwellTime('09:00', '09:15', 30);
-    expect(result.valid).toBe(false);
-    expect(result.duration).toBe(15);
-  });
+    const result = await itineraryService.addItem('itin-1', 'user-1', 'admin', {
+      resourceId: 'res-1',
+      dayNumber: 1,
+      startTime: '14:00',
+      endTime: '15:00',
+    });
 
-  it('passes when duration == resource.minDwellMinutes', () => {
-    const result = checkDwellTime('09:00', '09:30', 30);
-    expect(result.valid).toBe(true);
-    expect(result.duration).toBe(30);
-  });
-
-  it('passes when duration > resource.minDwellMinutes', () => {
-    const result = checkDwellTime('09:00', '11:00', 30);
-    expect(result.valid).toBe(true);
-    expect(result.duration).toBe(120);
-  });
-
-  it('violation for a resource with 60-min minimum', () => {
-    const result = checkDwellTime('14:00', '14:45', 60);
-    expect(result.valid).toBe(false);
-    expect(result.duration).toBe(45);
+    expect(result.id).toBe('new-item');
+    expect(prisma.itineraryItem.create).toHaveBeenCalled();
+    expect(prisma.itineraryVersion.create).toHaveBeenCalled();
   });
 });
 
-describe('No conflict when items are properly spaced', () => {
-  function timeToMinutes(time: string): number {
-    const [h, m] = time.split(':').map(Number);
-    return h * 60 + m;
-  }
+describe('itinerary.service.updateItinerary — versioning', () => {
+  it('does NOT cut a version on a status-only update', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.itinerary.update.mockResolvedValue(makeItinerary({ status: 'published' }));
 
-  function hasConflict(
-    newStart: string,
-    newEnd: string,
-    existingStart: string,
-    existingEnd: string,
-    bufferMinutes: number = 15,
-  ): boolean {
-    const startMin = timeToMinutes(newStart);
-    const endMin = timeToMinutes(newEnd);
-    const existStart = timeToMinutes(existingStart);
-    const existEnd = timeToMinutes(existingEnd);
+    await itineraryService.updateItinerary('itin-1', 'user-1', 'admin', { status: 'published' });
 
-    // Overlap
-    if (startMin < existEnd && endMin > existStart) return true;
-
-    // Buffer violation
-    if (startMin >= existEnd && startMin < existEnd + bufferMinutes) return true;
-    if (endMin > existStart - bufferMinutes && endMin <= existStart) return true;
-
-    return false;
-  }
-
-  it('no conflict: morning 09:00-10:00 and afternoon 14:00-15:00', () => {
-    expect(hasConflict('14:00', '15:00', '09:00', '10:00')).toBe(false);
+    expect(prisma.itineraryVersion.create).not.toHaveBeenCalled();
   });
 
-  it('no conflict: items with 20 minutes gap (> 15 min buffer)', () => {
-    expect(hasConflict('10:20', '11:00', '09:00', '10:00')).toBe(false);
+  it('cuts a new version on a content (title) update', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.itinerary.update.mockResolvedValue(makeItinerary({ title: 'Renamed' }));
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    // Previous version snapshot has the new schemaVersion 2 shape so the diff
+    // path can read prev.items / prev.metadata.
+    prisma.itineraryVersion.findFirst.mockResolvedValue({
+      versionNumber: 1,
+      snapshot: {
+        schemaVersion: 2,
+        metadata: {
+          id: 'itin-1',
+          ownerId: 'user-1',
+          title: 'Trip',
+          destination: 'Paris',
+          startDate: FIXED_START.toISOString(),
+          endDate: new Date('2026-06-05T00:00:00.000Z').toISOString(),
+          status: 'draft',
+        },
+        items: [],
+      },
+    });
+    prisma.itineraryVersion.create.mockResolvedValue({ versionNumber: 2 });
+
+    await itineraryService.updateItinerary('itin-1', 'user-1', 'admin', { title: 'Renamed' });
+
+    expect(prisma.itineraryVersion.create).toHaveBeenCalled();
+    const call = prisma.itineraryVersion.create.mock.calls[0][0];
+    expect(call.data.versionNumber).toBe(2);
+    // Snapshot now includes metadata + items, not just items.
+    expect(call.data.snapshot.metadata).toBeDefined();
+    expect(call.data.snapshot.items).toBeDefined();
+  });
+});
+
+describe('itinerary.service.createVersion — diff metadata', () => {
+  it('reports a metadata diff entry when title changes between versions', async () => {
+    // Seed: existing version with old title
+    const oldSnapshot = {
+      schemaVersion: 2,
+      metadata: {
+        id: 'itin-1',
+        ownerId: 'user-1',
+        title: 'Old Title',
+        destination: 'Paris',
+        startDate: FIXED_START.toISOString(),
+        endDate: new Date('2026-06-05T00:00:00.000Z').toISOString(),
+        status: 'draft',
+      },
+      items: [],
+    };
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary({ title: 'New Title' }));
+    prisma.itinerary.update.mockResolvedValue(makeItinerary({ title: 'New Title' }));
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.itineraryVersion.findFirst.mockResolvedValue({
+      versionNumber: 1,
+      snapshot: oldSnapshot,
+    });
+    prisma.itineraryVersion.create.mockResolvedValue({ versionNumber: 2 });
+
+    await itineraryService.updateItinerary('itin-1', 'user-1', 'admin', { title: 'New Title' });
+
+    const call = prisma.itineraryVersion.create.mock.calls[0][0];
+    expect(call.data.diffMetadata).toBeDefined();
+    const metaChanges = call.data.diffMetadata.metadata as Array<{ field: string; from: unknown; to: unknown }>;
+    expect(metaChanges.find((c) => c.field === 'title')).toEqual({
+      field: 'title',
+      from: 'Old Title',
+      to: 'New Title',
+    });
   });
 
-  it('no conflict: items on different conceptual slots', () => {
-    // First ends at 12:00, second starts at 13:00 (1 hour gap)
-    expect(hasConflict('13:00', '14:00', '10:00', '12:00')).toBe(false);
+  it('reports an item-level added diff when a new item lands', async () => {
+    const oldSnapshot = {
+      schemaVersion: 2,
+      metadata: {
+        id: 'itin-1',
+        ownerId: 'user-1',
+        title: 'Trip',
+        destination: 'Paris',
+        startDate: FIXED_START.toISOString(),
+        endDate: new Date('2026-06-05T00:00:00.000Z').toISOString(),
+        status: 'draft',
+      },
+      items: [],
+    };
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(makeResource());
+    prisma.itineraryItem.findMany
+      // 1st call: validateItem load existing items on day → none
+      .mockResolvedValueOnce([])
+      // 2nd call: createVersion fetching items for snapshot → contains the new item
+      .mockResolvedValueOnce([
+        {
+          id: 'item-new',
+          resourceId: 'res-1',
+          dayNumber: 1,
+          startTime: '14:00',
+          endTime: '15:00',
+          notes: null,
+          position: 0,
+        },
+      ]);
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue(null);
+    prisma.itineraryItem.create.mockResolvedValue({
+      id: 'item-new',
+      itineraryId: 'itin-1',
+      resourceId: 'res-1',
+      dayNumber: 1,
+      startTime: '14:00',
+      endTime: '15:00',
+      notes: null,
+      position: 0,
+      resource: makeResource(),
+    });
+    prisma.itineraryVersion.findFirst.mockResolvedValue({
+      versionNumber: 1,
+      snapshot: oldSnapshot,
+    });
+    prisma.itineraryVersion.create.mockResolvedValue({ versionNumber: 2 });
+
+    await itineraryService.addItem('itin-1', 'user-1', 'admin', {
+      resourceId: 'res-1',
+      dayNumber: 1,
+      startTime: '14:00',
+      endTime: '15:00',
+    });
+
+    const call = prisma.itineraryVersion.create.mock.calls[0][0];
+    expect(call.data.diffMetadata.items.added).toContain('item-new');
+    expect(call.data.diffMetadata.items.removed).toEqual([]);
   });
 });
