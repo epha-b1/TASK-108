@@ -2,17 +2,19 @@ services:
   api:
     build: .
     ports:
-      - "${HOST_API_PORT:-3000}:3000"
+      - "3000:3000"
     environment:
-      # All secrets MUST be provided via .env or the host environment.
-      # docker compose will fail to start if any required value is missing.
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set (see .env.example)}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set to a strong random value (>=32 chars)}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be set to a 32-character random value}
-      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1800}
-      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-1209600}
-      PORT: ${PORT:-3000}
-      NODE_ENV: ${NODE_ENV:-production}
+      # All values are inlined directly. The compose stack is the dev /
+      # acceptance test rig — there is intentionally NO .env file. The
+      # single-container production image (Dockerfile) still requires the
+      # operator to pass JWT_SECRET / ENCRYPTION_KEY at `docker run` time.
+      DATABASE_URL: "mysql://tripforge:Tripforge123Strong@db:3306/tripforge"
+      JWT_SECRET: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      ENCRYPTION_KEY: "01234567890123456789012345678901"
+      ACCESS_TOKEN_TTL: "1800"
+      REFRESH_TOKEN_TTL: "1209600"
+      PORT: "3000"
+      NODE_ENV: "test"
     depends_on:
       db:
         condition: service_healthy
@@ -46,10 +48,12 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER must be set}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be set to a strong value}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-tripforge}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set to a strong value}
+      # Inlined to avoid a .env file. These credentials are local-only and
+      # never used outside the dev/acceptance compose rig.
+      MYSQL_USER: "tripforge"
+      MYSQL_PASSWORD: "Tripforge123Strong"
+      MYSQL_DATABASE: "tripforge"
+      MYSQL_ROOT_PASSWORD: "Root123StrongPwd"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
