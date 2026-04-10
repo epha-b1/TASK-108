@@ -287,10 +287,17 @@ encrypted security-question answers, and raw model inference inputs are
 
 ## Contract sync
 
-`../docs/api-spec.md` (project root `docs/` directory, one level above
-`repo/`) and `src/config/swagger.ts` are kept in sync by the
-`unit_tests/contract_sync.spec.ts` test. Adding or changing an endpoint in
-one file without updating the other causes the unit test suite to fail.
+The OpenAPI contract has two locations that MUST stay in sync:
+
+- `repo/docs/api-spec.md` — repo-local copy used by tests, the Docker image,
+  and any reviewer running from `repo/` alone.
+- `repo/src/config/swagger.ts` — the live OpenAPI object served at `/api/docs`.
+
+`unit_tests/contract_sync.spec.ts` parses both and asserts they describe the
+same set of endpoints, so adding or changing an operation in one file
+without updating the other fails the unit test suite. The repo-local
+`repo/docs/` directory mirrors the canonical project-root `docs/` so
+reviewers don't have to look outside `repo/` (audit issue 7 fix).
 
 ---
 

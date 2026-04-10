@@ -23,9 +23,13 @@ RUN npm ci
 COPY tsconfig.json jest.config.js ./
 COPY prisma/ ./prisma/
 COPY src/ ./src/
+COPY scripts/ ./scripts/
 COPY unit_tests/ ./unit_tests/
 COPY API_tests/ ./API_tests/
 COPY docker/ ./docker/
+# repo-local mirror of the canonical /docs (kept self-contained so the
+# contract-sync test can run from repo/ alone — see audit issue 7).
+COPY docs/ ./docs/
 
 RUN npm run build \
  && mkdir -p dist/models \

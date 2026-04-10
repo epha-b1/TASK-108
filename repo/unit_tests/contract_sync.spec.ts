@@ -48,7 +48,14 @@ function listOperations(spec: { paths: OpenApiPaths }): Set<string> {
   return ops;
 }
 
-const docsPath = path.resolve(__dirname, '..', '..', 'docs', 'api-spec.md');
+// Resolve the API spec from a self-contained location inside repo/ first.
+// This lets reviewers run the test against repo/ alone (e.g. inside the
+// Docker image, where the project-root `docs/` is not part of the build
+// context). We fall back to `../../docs/api-spec.md` for backwards
+// compatibility with checkouts where docs/ still lives at the project root.
+const repoLocalDocs = path.resolve(__dirname, '..', 'docs', 'api-spec.md');
+const projectRootDocs = path.resolve(__dirname, '..', '..', 'docs', 'api-spec.md');
+const docsPath = fs.existsSync(repoLocalDocs) ? repoLocalDocs : projectRootDocs;
 const docsYaml = fs.readFileSync(docsPath, 'utf8');
 const loader = yaml.safeLoad ?? yaml.load;
 const docsSpec = loader(docsYaml) as { paths: OpenApiPaths; components?: { schemas?: Record<string, unknown> } };
