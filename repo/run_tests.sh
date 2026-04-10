@@ -6,11 +6,18 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml ...
 #
-# The base `docker-compose.yml` is production-shaped and refuses to start
-# without host-exported secrets. The `docker-compose.test.yml` override
-# layers in throwaway TEST_ONLY_NOT_FOR_PRODUCTION credentials and switches
-# `NODE_ENV=test`. There is intentionally NO `.env` file involved — every
-# secret needed by the test stack is inlined in the override file.
+# The base `docker-compose.yml` is production-shaped: it uses
+# `${VAR:?...}` interpolation, which Docker Compose evaluates at file
+# *parse* time (per file, before any -f override is merged). That means a
+# missing `DATABASE_URL` in the host shell aborts compose before it ever
+# looks at the override file's container `environment:` block.
+#
+# Fix: this script EXPORTS the same TEST_ONLY_NOT_FOR_PRODUCTION values
+# the override file documents *before* it invokes compose, so the
+# parse-time interpolation succeeds. The override file is still loaded
+# (for NODE_ENV=test and to keep manual `docker compose ... -f` users in
+# sync), but the secrets that satisfy `${VAR:?...}` come from these
+# shell-level exports. There is intentionally NO `.env` file involved.
 #
 # Strict fail-fast posture: if any compose step fails the script exits
 # immediately with a clear error instead of continuing into a useless
@@ -19,12 +26,52 @@
 set -eu
 
 # ──────────────────────────────────────────────
+# Step 0 — TEST_ONLY shell exports for compose interpolation.
+# These MUST stay in sync with docker-compose.test.yml's environment
+# block; both sources document the same values from different angles
+# (shell-level for base-file interpolation, container-level for the
+# running services). The strings are deliberately marked
+# TEST_ONLY_NOT_FOR_PRODUCTION so a copy-paste into a real environment
+# is unmistakable.
+# ──────────────────────────────────────────────
+export DATABASE_URL="mysql://tripforge:TEST_ONLY_NOT_FOR_PRODUCTION_db@db:3306/tripforge"
+export JWT_SECRET="TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx"
+export ENCRYPTION_KEY="TEST_ONLY_NOT_FOR_PRODUCTION__32"
+export MYSQL_USER="tripforge"
+export MYSQL_PASSWORD="TEST_ONLY_NOT_FOR_PRODUCTION_db"
+export MYSQL_DATABASE="tripforge"
+export MYSQL_ROOT_PASSWORD="TEST_ONLY_NOT_FOR_PRODUCTION_root"
+export NODE_ENV="test"
+
+# ──────────────────────────────────────────────
 # Canonical compose command — used for EVERY docker compose call below.
 # Printed for transparency so reviewers can copy/paste it manually if
 # this script ever needs to be bypassed.
 # ──────────────────────────────────────────────
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.test.yml"
 echo "[run_tests] compose command: ${COMPOSE}"
+
+# ──────────────────────────────────────────────
+# Preflight — make sure the docker daemon is reachable. If `docker info`
+# fails the rest of the script can't possibly succeed, so bail out with
+# a clear remediation hint instead of a noisy compose stacktrace.
+# ──────────────────────────────────────────────
+echo ""
+echo "=== Preflight: docker daemon ==="
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: 'docker' CLI is not installed on this host." >&2
+  echo "       Install Docker Desktop / docker-engine and re-run." >&2
+  exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+  echo "ERROR: docker daemon is not reachable." >&2
+  echo "       Start it with one of:" >&2
+  echo "         systemctl --user start docker-desktop   # Docker Desktop" >&2
+  echo "         sudo systemctl start docker             # docker-engine on Linux" >&2
+  echo "         open -a Docker                          # Docker Desktop on macOS" >&2
+  exit 1
+fi
+echo "docker daemon OK."
 
 # ──────────────────────────────────────────────
 # Step 1 — Ensure containers are up

@@ -127,7 +127,35 @@ host-environment secrets; the `docker-compose.test.yml` override layers in
 the throwaway `TEST_ONLY_NOT_FOR_PRODUCTION` credentials and switches
 `NODE_ENV=test`. There is no `.env` file involved.
 
+The recommended invocation is the bundled `run_tests.sh` script, which
+wraps the canonical two-file compose command, brings the stack up,
+waits for the API to be healthy, runs both test suites, and prints a
+summary. It exits non-zero immediately if compose startup fails so you
+never end up running tests against a half-started stack.
+
 ```bash
+./run_tests.sh
+```
+
+If you need to run the steps manually (e.g. to iterate on a single
+test file inside the container) you must first export the same
+TEST_ONLY shell variables that `run_tests.sh` exports — Docker Compose
+evaluates `${VAR:?...}` in the base file at parse time, *before* the
+override file's container `environment:` block is merged, so the
+override alone is not enough.
+
+```bash
+# TEST_ONLY shell exports — kept in sync with docker-compose.test.yml.
+# Never use these values in a real environment.
+export DATABASE_URL="mysql://tripforge:TEST_ONLY_NOT_FOR_PRODUCTION_db@db:3306/tripforge"
+export JWT_SECRET="TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx"
+export ENCRYPTION_KEY="TEST_ONLY_NOT_FOR_PRODUCTION__32"
+export MYSQL_USER="tripforge"
+export MYSQL_PASSWORD="TEST_ONLY_NOT_FOR_PRODUCTION_db"
+export MYSQL_DATABASE="tripforge"
+export MYSQL_ROOT_PASSWORD="TEST_ONLY_NOT_FOR_PRODUCTION_root"
+export NODE_ENV="test"
+
 # Bring the test stack up
 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
 
@@ -146,12 +174,6 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 # Tear down when done
 docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
 ```
-
-> **Note on `run_tests.sh`** — the script in this repo invokes the
-> single-file `docker compose` command and is therefore *not* compatible
-> with the new compose split. It is preserved as-is for legacy callers but
-> should not be used; run the explicit commands above instead. Reviewers
-> should treat the snippet above as the canonical test invocation.
 
 ## Ports
 
