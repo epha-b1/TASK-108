@@ -1,4 +1,4 @@
 .claude/
-.tmp/
+# .tmp/
 *.tmpl
 .work/

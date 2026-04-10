@@ -1,120 +1,118 @@
 /**
- * Unit tests for notification logic.
+ * Unit tests for notification template/backoff/cap logic.
  *
- * Tests template variable resolution, exponential backoff calculation,
- * and daily cap enforcement.
+ * The previous version of this file replicated `resolveTemplate`,
+ * `calculateBackoffMs`, and the cap rule locally and tested the
+ * replicas. That gave a false sense of coverage — production drift
+ * could not be detected. This rewrite imports the REAL exports from
+ * `src/services/notification.service.ts` so the assertions track
+ * production behaviour directly. Audit issue 6.
+ *
+ * Coverage:
+ *   - resolveTemplate: variable substitution, missing-key behaviour,
+ *     repeated-key resolution, no-placeholder identity.
+ *   - calculateBackoffMs: exponential schedule for attempts 1..3 plus
+ *     cross-attempt growth assertion.
+ *   - isDailyCapReached: boundary semantics including cap-of-zero.
+ *   - MAX_OUTBOX_ATTEMPTS: lock the production constant.
  */
 
-describe('Template variable resolution', () => {
-  function resolveTemplate(body: string, variables: Record<string, string>): string {
-    return body.replace(/\{\{(\w+)\}\}/g, (match, key) => {
-      return variables[key] !== undefined ? variables[key] : match;
-    });
-  }
+import {
+  resolveTemplate,
+  calculateBackoffMs,
+  isDailyCapReached,
+  MAX_OUTBOX_ATTEMPTS,
+} from '../src/services/notification.service';
 
+describe('resolveTemplate (real production export)', () => {
   it('"Hello {{name}}" with {name: "Alice"} resolves to "Hello Alice"', () => {
-    const result = resolveTemplate('Hello {{name}}', { name: 'Alice' });
-    expect(result).toBe('Hello Alice');
+    expect(resolveTemplate('Hello {{name}}', { name: 'Alice' })).toBe('Hello Alice');
   });
 
-  it('resolves multiple variables', () => {
-    const template = 'Dear {{name}}, your trip to {{destination}} is confirmed.';
-    const result = resolveTemplate(template, { name: 'Bob', destination: 'Paris' });
-    expect(result).toBe('Dear Bob, your trip to Paris is confirmed.');
+  it('resolves multiple distinct variables', () => {
+    expect(
+      resolveTemplate('Dear {{name}}, your trip to {{destination}} is confirmed.', {
+        name: 'Bob',
+        destination: 'Paris',
+      }),
+    ).toBe('Dear Bob, your trip to Paris is confirmed.');
   });
 
-  it('leaves unmatched placeholders intact', () => {
-    const result = resolveTemplate('Hello {{name}}, your {{missing}} is ready', {
-      name: 'Carol',
-    });
-    expect(result).toBe('Hello Carol, your {{missing}} is ready');
+  it('leaves unmatched placeholders intact (so a missing variable is visible to the operator)', () => {
+    expect(
+      resolveTemplate('Hello {{name}}, your {{missing}} is ready', { name: 'Carol' }),
+    ).toBe('Hello Carol, your {{missing}} is ready');
   });
 
   it('handles empty variables object', () => {
-    const result = resolveTemplate('Hello {{name}}', {});
-    expect(result).toBe('Hello {{name}}');
+    expect(resolveTemplate('Hello {{name}}', {})).toBe('Hello {{name}}');
   });
 
-  it('handles template with no placeholders', () => {
-    const result = resolveTemplate('Hello world', { name: 'Alice' });
-    expect(result).toBe('Hello world');
+  it('returns the body unchanged when there are no placeholders', () => {
+    expect(resolveTemplate('Hello world', { name: 'Alice' })).toBe('Hello world');
   });
 
-  it('resolves same variable used multiple times', () => {
-    const result = resolveTemplate('{{name}} and {{name}} again', { name: 'Dave' });
-    expect(result).toBe('Dave and Dave again');
+  it('resolves the same variable used multiple times', () => {
+    expect(resolveTemplate('{{name}} and {{name}} again', { name: 'Dave' })).toBe(
+      'Dave and Dave again',
+    );
   });
 });
 
-describe('Exponential backoff calculation', () => {
-  // From notification.service.ts processOutbox:
-  // True exponential backoff: base * 2^(attempt-1) seconds, base=30s
-  function calculateBackoffMs(attempt: number): number {
-    return 30 * 1000 * Math.pow(2, attempt - 1);
-  }
-
-  it('attempt 1 = 30 seconds (30000ms)', () => {
-    expect(calculateBackoffMs(1)).toBe(30000);
+describe('calculateBackoffMs (real production export)', () => {
+  it('attempt 1 = 30s', () => {
+    expect(calculateBackoffMs(1)).toBe(30_000);
   });
 
-  it('attempt 2 = 60 seconds (60000ms)', () => {
-    expect(calculateBackoffMs(2)).toBe(60000);
+  it('attempt 2 = 60s', () => {
+    expect(calculateBackoffMs(2)).toBe(60_000);
   });
 
-  it('attempt 3 = 120 seconds (120000ms)', () => {
-    expect(calculateBackoffMs(3)).toBe(120000);
+  it('attempt 3 = 120s', () => {
+    expect(calculateBackoffMs(3)).toBe(120_000);
   });
 
-  it('backoff grows exponentially, not linearly', () => {
-    const b1 = calculateBackoffMs(1);
-    const b2 = calculateBackoffMs(2);
-    const b3 = calculateBackoffMs(3);
-    expect(b2).toBe(b1 * 2);
-    expect(b3).toBe(b2 * 2);
+  it('grows exponentially (doubling each step)', () => {
+    expect(calculateBackoffMs(2)).toBe(calculateBackoffMs(1) * 2);
+    expect(calculateBackoffMs(3)).toBe(calculateBackoffMs(2) * 2);
   });
 
-  it('next retry time is in the future', () => {
+  it('next retry time is in the future relative to "now"', () => {
     const now = Date.now();
-    const backoffMs = calculateBackoffMs(1);
-    const nextRetry = new Date(now + backoffMs);
+    const nextRetry = new Date(now + calculateBackoffMs(1));
     expect(nextRetry.getTime()).toBeGreaterThan(now);
-    expect(nextRetry.getTime() - now).toBe(30000);
-  });
-
-  it('max attempts is 3 before marking as failed', () => {
-    const MAX_ATTEMPTS = 3;
-    const attempt = 3;
-    expect(attempt >= MAX_ATTEMPTS).toBe(true);
   });
 });
 
-describe('Daily cap enforcement', () => {
-  function isCapReached(dailySent: number, dailyCap: number): boolean {
-    return dailySent >= dailyCap;
-  }
+describe('MAX_OUTBOX_ATTEMPTS (real production constant)', () => {
+  it('ceiling is exactly 3 — outbox stops retrying after that', () => {
+    expect(MAX_OUTBOX_ATTEMPTS).toBe(3);
+  });
+});
 
-  it('blocks when sent >= cap', () => {
-    expect(isCapReached(20, 20)).toBe(true);
+describe('isDailyCapReached (real production export)', () => {
+  it('blocks when sent equals cap (inclusive)', () => {
+    expect(isDailyCapReached(20, 20)).toBe(true);
   });
 
-  it('blocks when sent > cap', () => {
-    expect(isCapReached(25, 20)).toBe(true);
+  it('blocks when sent exceeds cap', () => {
+    expect(isDailyCapReached(25, 20)).toBe(true);
   });
 
   it('allows when sent < cap', () => {
-    expect(isCapReached(19, 20)).toBe(false);
+    expect(isDailyCapReached(19, 20)).toBe(false);
   });
 
-  it('allows when no notifications sent yet', () => {
-    expect(isCapReached(0, 20)).toBe(false);
+  it('allows on a brand-new day with no sends yet', () => {
+    expect(isDailyCapReached(0, 20)).toBe(false);
   });
 
   it('blocks immediately for a cap of 0', () => {
-    expect(isCapReached(0, 0)).toBe(true);
+    expect(isDailyCapReached(0, 0)).toBe(true);
   });
 
   it('works with custom cap values', () => {
-    expect(isCapReached(5, 5)).toBe(true);
-    expect(isCapReached(4, 5)).toBe(false);
+    expect(isDailyCapReached(5, 5)).toBe(true);
+    expect(isDailyCapReached(4, 5)).toBe(false);
   });
 });

@@ -36,23 +36,55 @@ Health check: `curl http://localhost:3000/health`
 
 ## Local Development (compose, separate API + MySQL)
 
-The compose path is for development only. It runs the API and a separate
-MySQL container so you can iterate without rebuilding the bundled image.
+The compose path runs the API and a separate MySQL container so you can
+iterate without rebuilding the bundled single-container image.
+
+There is **no `.env` file** in this repo. The default `docker-compose.yml`
+defaults `NODE_ENV` to `production` and refuses to start if any of these
+secrets is missing from the *host* environment:
+
+| Required host env var | Notes |
+|---|---|
+| `DATABASE_URL` | `mysql://tripforge:PASS@db:3306/tripforge` |
+| `JWT_SECRET` | >= 32 chars |
+| `ENCRYPTION_KEY` | exactly 32 chars |
+| `MYSQL_USER` | matches the user portion of `DATABASE_URL` |
+| `MYSQL_PASSWORD` | matches the password portion of `DATABASE_URL` |
+| `MYSQL_ROOT_PASSWORD` | strong random value |
+
+A real production-shape run looks like:
 
 ```bash
-cp .env.example .env
-# Generate strong secrets and replace the placeholders in .env:
-sed -i "s|REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS_FROM_OPENSSL|$(openssl rand -hex 32)|" .env
-sed -i "s|REPLACE_WITH_EXACTLY_32_RANDOM_CHARS_|$(openssl rand -base64 24 | cut -c1-32)|" .env
-
+DATABASE_URL=mysql://tripforge:PASS@db:3306/tripforge \
+JWT_SECRET=$(openssl rand -hex 32) \
+ENCRYPTION_KEY=$(openssl rand -base64 24 | cut -c1-32) \
+MYSQL_USER=tripforge \
+MYSQL_PASSWORD=PASS \
+MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24) \
 docker compose up -d --build
-docker compose exec -T api npm run test:unit -- --runInBand
-docker compose exec -T api npx jest --testPathPattern=API_tests --runInBand
 ```
 
-`docker compose up` will refuse to start if any of `JWT_SECRET`,
-`ENCRYPTION_KEY`, `DATABASE_URL`, `MYSQL_USER`, `MYSQL_PASSWORD`, or
-`MYSQL_ROOT_PASSWORD` is missing.
+### Test / CI override (`docker-compose.test.yml`)
+
+For the unit + API test suites we ship a separate override file. It
+opts the stack into `NODE_ENV=test`, layers in throwaway credentials
+clearly marked `TEST_ONLY_NOT_FOR_PRODUCTION`, and lets reviewers run
+the suites in one command — no host env exports, no `.env` file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  exec -T api npm run test:unit -- --runInBand
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  exec -T api npx jest --testPathPattern=API_tests --runInBand
+```
+
+The compose file maps host port **3010** → container port 3000 so it
+coexists with any other local service that already binds 3000. The
+override exists so the *default* compose path stays production-shaped
+and rejects ad-hoc startup, while reviewers still have a one-command
+test rig. For the truly single-container production path see the
+*Quick Start* section above.
 
 ---
 
@@ -94,8 +126,9 @@ curl -s http://localhost:3000/health
 
 | Service | URL |
 |---------|-----|
-| API | http://localhost:3000 |
-| Swagger | http://localhost:3000/api/docs |
+| API (single-container) | http://localhost:3000 |
+| API (compose dev rig)  | http://localhost:3010 |
+| Swagger (single-container) | http://localhost:3000/api/docs |
 | MySQL (compose only) | localhost:3306 |
 
 ## Test Credentials (after `prisma seed`)
@@ -209,6 +242,23 @@ deploy`.
 - `NODE_ENV=test` or unset: defaults to `mock` mode (deterministic mock inference)
 - Override with `MODEL_ADAPTER_MODE=mock|process`
 
+#### Runtime requirements for `process` mode
+
+The bundled single-container image (Dockerfile) installs:
+
+| Adapter | Binary | Alpine package | Allowlist entry |
+|---|---|---|---|
+| PMML / `pmml` | `/usr/bin/java` (symlink) | `openjdk17-jre-headless` | `/usr/bin/java` |
+| ONNX / `onnx` | `/usr/bin/python3` | `python3`, `py3-pip` | `/usr/bin/python3` |
+| Custom / `custom` | one of the above | — | strict allowlist |
+
+Both binaries are installed during `docker build`, so the production image
+boots straight into `process` mode without a `MODEL_ADAPTER_MODE=mock` escape
+hatch. `onnxruntime` itself is **not** preinstalled — operators wanting a
+real ONNX execution path must add it via `pip install onnxruntime` (or bake
+it into a derived image). Until they do, ONNX inference returns a clear
+runtime error rather than silently falling back to mock output.
+
 ### Request Validation
 
 Zod request validation is enabled on:
@@ -289,15 +339,16 @@ encrypted security-question answers, and raw model inference inputs are
 
 The OpenAPI contract has two locations that MUST stay in sync:
 
-- `repo/docs/api-spec.md` — repo-local copy used by tests, the Docker image,
-  and any reviewer running from `repo/` alone.
+- `../docs/api-spec.md` — the canonical human-curated reference document at
+  the project root (one directory above `repo/`).
 - `repo/src/config/swagger.ts` — the live OpenAPI object served at `/api/docs`.
 
 `unit_tests/contract_sync.spec.ts` parses both and asserts they describe the
 same set of endpoints, so adding or changing an operation in one file
-without updating the other fails the unit test suite. The repo-local
-`repo/docs/` directory mirrors the canonical project-root `docs/` so
-reviewers don't have to look outside `repo/` (audit issue 7 fix).
+without updating the other fails the unit test suite. The test must be run
+from a checkout that includes the project-root `docs/` (host or CI). It is
+**not** runnable from inside the built Docker image, whose build context is
+`repo/` and intentionally does not bundle the docs directory.
 
 ---
 

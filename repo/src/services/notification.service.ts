@@ -10,10 +10,51 @@ import {
 
 /* ---------- Helpers ---------- */
 
-function resolveTemplate(body: string, variables: Record<string, string>): string {
+/**
+ * Substitute `{{name}}` placeholders in a notification template body with
+ * the corresponding entries in `variables`. Unmatched placeholders are
+ * left intact (they're surfaced verbatim in the rendered message so an
+ * operator can spot a missing variable in the delivered notification).
+ *
+ * Exported so the unit suite can pin the resolver behaviour without
+ * having to spin up a real Prisma client. The same function is the one
+ * `sendNotification` uses on the production code path.
+ */
+export function resolveTemplate(body: string, variables: Record<string, string>): string {
   return body.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     return variables[key] !== undefined ? variables[key] : match;
   });
+}
+
+/**
+ * Maximum number of delivery attempts before an outbox entry is marked
+ * as `failed` and stops retrying. Exported so test code can keep its
+ * boundary expectations in lockstep with the production constant.
+ */
+export const MAX_OUTBOX_ATTEMPTS = 3;
+
+/**
+ * Exponential backoff schedule used by `processOutbox`. Returns the
+ * delay in milliseconds before the `attempt`-th retry should fire.
+ *
+ *   attempt 1 →  30 s
+ *   attempt 2 →  60 s
+ *   attempt 3 → 120 s
+ *
+ * Exported so the unit suite can assert the schedule on the *real*
+ * production function rather than a local replica.
+ */
+export function calculateBackoffMs(attempt: number): number {
+  return 30 * 1000 * Math.pow(2, attempt - 1);
+}
+
+/**
+ * Daily-cap policy gate. The cap is enforced inclusively (`>=`) so a
+ * cap of 0 blocks immediately and a cap of N blocks the (N+1)-th send.
+ * Exported so the unit suite can pin the boundary semantics.
+ */
+export function isDailyCapReached(dailySent: number, dailyCap: number): boolean {
+  return dailySent >= dailyCap;
 }
 
 /* ---------- Template Management ---------- */
@@ -84,7 +125,7 @@ export async function sendNotification(
     throw new AppError(403, FORBIDDEN, 'User has been blacklisted from notifications');
   }
 
-  if (settings && settings.dailySent >= settings.dailyCap) {
+  if (settings && isDailyCapReached(settings.dailySent, settings.dailyCap)) {
     throw new AppError(429, 'RATE_LIMITED', 'Daily notification cap reached');
   }
 
@@ -214,7 +255,6 @@ export async function getStats() {
 
 export async function processOutbox() {
   const prisma = getPrisma();
-  const MAX_ATTEMPTS = 3;
 
   // Find pending entries that are due for processing
   const pendingEntries = await prisma.outboxMessage.findMany({
@@ -223,7 +263,7 @@ export async function processOutbox() {
       OR: [
         { attempts: 0 }, // never attempted
         {
-          attempts: { lt: MAX_ATTEMPTS },
+          attempts: { lt: MAX_OUTBOX_ATTEMPTS },
           notification: {
             nextRetryAt: { lte: new Date() },
           },
@@ -276,15 +316,15 @@ export async function processOutbox() {
         });
       });
       results.push({ id: entry.id, status: 'delivered' });
-    } else if (newAttempts >= MAX_ATTEMPTS) {
+    } else if (newAttempts >= MAX_OUTBOX_ATTEMPTS) {
       await prisma.outboxMessage.update({
         where: { id: entry.id },
         data: { status: 'failed', attempts: newAttempts, lastError: errorMessage },
       });
       results.push({ id: entry.id, status: 'failed' });
     } else {
-      // True exponential backoff: base * 2^(attempt-1) seconds, base=30s
-      const backoffMs = 30 * 1000 * Math.pow(2, newAttempts - 1);
+      // True exponential backoff: see `calculateBackoffMs` for the schedule.
+      const backoffMs = calculateBackoffMs(newAttempts);
       const nextRetry = new Date(Date.now() + backoffMs);
       await prisma.$transaction(async (tx) => {
         await tx.outboxMessage.update({

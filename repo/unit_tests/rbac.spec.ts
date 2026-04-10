@@ -1,8 +1,11 @@
-import { requireRole, requirePermission } from '../src/middleware/auth.middleware';
+import { requireRole, requirePermission, resolveEffectiveRoles } from '../src/middleware/auth.middleware';
 import { Request, Response, NextFunction } from 'express';
+import { getPrisma } from '../src/config/database';
 
-function mockReqResNext(user?: any) {
-  const req = { user, permissions: undefined } as unknown as Request;
+const prisma = getPrisma() as unknown as Record<string, Record<string, jest.Mock>>;
+
+function mockReqResNext(user?: any, roleNames?: Set<string>) {
+  const req = { user, permissions: undefined, roleNames } as unknown as Request;
   const res = {} as Response;
   let calledNext = false;
   let nextErr: any = null;
@@ -96,6 +99,81 @@ describe('Permission collection logic', () => {
   it('returns empty array when user has no roles', () => {
     const permissionSet = new Set<string>();
     expect(Array.from(permissionSet)).toEqual([]);
+  });
+});
+
+// === Canonical role source (audit issue 3) ===
+// The middleware now derives the effective role set from `user_roles` and
+// only falls back to the legacy `users.role` column when no membership row
+// exists. These tests pin both branches and the admin-detection logic.
+describe('resolveEffectiveRoles — canonical role source', () => {
+  beforeEach(() => {
+    if (prisma.userRole?.findMany?.mockReset) prisma.userRole.findMany.mockReset();
+  });
+
+  it('reads role names from user_roles when memberships exist', async () => {
+    prisma.userRole.findMany.mockResolvedValue([
+      { userId: 'u1', roleId: 'r-admin', role: { id: 'r-admin', name: 'admin' } },
+    ]);
+    const roles = await resolveEffectiveRoles('u1', 'organizer');
+    // user_roles wins — we ignore the stale `users.role` value entirely.
+    expect([...roles]).toEqual(['admin']);
+  });
+
+  it('falls back to legacy users.role only when memberships are empty', async () => {
+    prisma.userRole.findMany.mockResolvedValue([]);
+    const roles = await resolveEffectiveRoles('u2', 'organizer');
+    expect([...roles]).toEqual(['organizer']);
+  });
+
+  it('returns empty set when memberships empty AND legacy role missing', async () => {
+    prisma.userRole.findMany.mockResolvedValue([]);
+    const roles = await resolveEffectiveRoles('u3', null);
+    expect(roles.size).toBe(0);
+  });
+
+  it('aggregates multiple role memberships', async () => {
+    prisma.userRole.findMany.mockResolvedValue([
+      { userId: 'u4', roleId: 'r1', role: { name: 'organizer' } },
+      { userId: 'u4', roleId: 'r2', role: { name: 'admin' } },
+    ]);
+    const roles = await resolveEffectiveRoles('u4', null);
+    expect(roles.has('admin')).toBe(true);
+    expect(roles.has('organizer')).toBe(true);
+  });
+});
+
+describe('requireRole — canonical req.roleNames', () => {
+  it('passes when admin lives only in user_roles (legacy users.role=organizer)', () => {
+    const { req, res, next, getError } = mockReqResNext(
+      { userId: 'u1', username: 'promoted', role: 'admin' },
+      new Set(['admin']),
+    );
+    requireRole('admin')(req, res, next);
+    expect(getError()).toBeNull();
+  });
+
+  it('rejects when neither roleNames nor primary role match', () => {
+    const { req, res, next, getError } = mockReqResNext(
+      { userId: 'u1', username: 'org', role: 'organizer' },
+      new Set(['organizer']),
+    );
+    requireRole('admin')(req, res, next);
+    expect(getError()).not.toBeNull();
+    expect(getError().statusCode).toBe(403);
+  });
+});
+
+describe('requirePermission — admin bypass uses canonical roleNames', () => {
+  it('admin bypass triggers when user_roles contains admin even if primary role string is stale', async () => {
+    const { req, res, next, getError } = mockReqResNext(
+      // simulate a stale JWT payload that still says 'organizer'
+      { userId: 'u1', username: 'promoted', role: 'organizer' },
+      new Set(['admin']),
+    );
+    // Should bypass without consulting permissions
+    await requirePermission('user:write')(req, res, next);
+    expect(getError()).toBeNull();
   });
 });
 

@@ -451,6 +451,21 @@ describe('Cross-user authorization', () => {
   });
 });
 
+// === Canonical error envelope on share/export 404 (audit issue 4) ===
+// The shared and export handlers used to return ad-hoc `{ message }` bodies.
+// They now route through AppError + the global handler so the response
+// carries the canonical envelope.
+describe('Canonical error envelope on share/export 404s', () => {
+  it('GET /shared/<unknown> → 404 with canonical envelope', async () => {
+    const res = await request(app).get(`/shared/this-token-does-not-exist-${ts}`);
+    expect(res.status).toBe(404);
+    expect(res.body.statusCode).toBe(404);
+    expect(res.body.code).toBe('NOT_FOUND');
+    expect(res.body.message).toMatch(/shared itinerary/i);
+    expect(res.body.requestId).toBeDefined();
+  });
+});
+
 // === Bidirectional travel-time feasibility ===
 // The audit flagged that only prev→new was checked; new→next was missing.
 // This test proves the fix: an item that fits after the previous item but

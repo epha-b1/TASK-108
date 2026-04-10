@@ -48,14 +48,12 @@ function listOperations(spec: { paths: OpenApiPaths }): Set<string> {
   return ops;
 }
 
-// Resolve the API spec from a self-contained location inside repo/ first.
-// This lets reviewers run the test against repo/ alone (e.g. inside the
-// Docker image, where the project-root `docs/` is not part of the build
-// context). We fall back to `../../docs/api-spec.md` for backwards
-// compatibility with checkouts where docs/ still lives at the project root.
-const repoLocalDocs = path.resolve(__dirname, '..', 'docs', 'api-spec.md');
-const projectRootDocs = path.resolve(__dirname, '..', '..', 'docs', 'api-spec.md');
-const docsPath = fs.existsSync(repoLocalDocs) ? repoLocalDocs : projectRootDocs;
+// The canonical OpenAPI source lives at the project root, one level above
+// repo/. It is intentionally NOT mirrored inside repo/, so the test resolves
+// it relative to the repo checkout. This means the contract sync test must
+// be run from a full checkout (host or CI), not from inside the built Docker
+// image (whose build context is repo/).
+const docsPath = path.resolve(__dirname, '..', '..', 'docs', 'api-spec.md');
 const docsYaml = fs.readFileSync(docsPath, 'utf8');
 const loader = yaml.safeLoad ?? yaml.load;
 const docsSpec = loader(docsYaml) as { paths: OpenApiPaths; components?: { schemas?: Record<string, unknown> } };

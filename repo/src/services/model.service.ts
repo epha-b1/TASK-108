@@ -292,9 +292,16 @@ function mockInferFn(input: Record<string, unknown>, config: ModelConfig | null)
 
 /**
  * Safely evaluate a simple condition of the form "input.field op value".
- * Only supports comparison operators and field access — no arbitrary code execution.
+ * Only supports a fixed grammar of comparison operators and a single field
+ * access — no arbitrary code execution, no `eval`, no `new Function`. The
+ * grammar deliberately rejects `==`/`!=` (loose equality), prototype access,
+ * function calls, and any token outside the regex below.
+ *
+ * Exported so the security regression suite can pin every accept/reject
+ * branch directly against the production implementation rather than a
+ * locally replicated copy (audit issue 6).
  */
-function safeEvaluateCondition(condition: string, input: Record<string, unknown>): boolean {
+export function safeEvaluateCondition(condition: string, input: Record<string, unknown>): boolean {
   // Parse "input.field op value" patterns only
   const match = condition.match(/^input\.(\w+)\s*(>=|<=|===|!==|>|<)\s*(.+)$/);
   if (!match) return false;

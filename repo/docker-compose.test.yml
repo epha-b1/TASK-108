@@ -1,0 +1,41 @@
+# Test/CI override for the TripForge compose stack.
+#
+# Used as:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml exec -T api \
+#     npm run test:unit -- --runInBand
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml exec -T api \
+#     npx jest --testPathPattern=API_tests --runInBand
+#
+# This override:
+#   1. Switches NODE_ENV to "test" so the test-only routes (`/__test__/boom`)
+#      and the deterministic mock model adapter become active.
+#   2. Inlines a fixed set of throwaway test credentials, so reviewers can
+#      run the suite with a single command without exporting anything.
+#   3. Crucially this is OPT-IN — the default `docker-compose.yml` still
+#      requires explicit secret injection from the host environment, so
+#      the production deploy posture is not weakened.
+#
+# These credentials are:
+#   - Local-network only (the db service does not publish 3306 to the
+#     internet — only the host machine).
+#   - Long enough to satisfy the application's startup secret validation
+#     (JWT_SECRET >= 32 chars, ENCRYPTION_KEY exactly 32 chars).
+#   - Marked as "TEST_ONLY_NOT_FOR_PRODUCTION" so a copy-paste into a real
+#     environment is unmistakable.
+
+services:
+  api:
+    environment:
+      NODE_ENV: test
+      DATABASE_URL: "mysql://tripforge:TEST_ONLY_NOT_FOR_PRODUCTION_db@db:3306/tripforge"
+      JWT_SECRET: "TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx"
+      ENCRYPTION_KEY: "TEST_ONLY_NOT_FOR_PRODUCTION__32"
+
+  db:
+    environment:
+      MYSQL_USER: "tripforge"
+      MYSQL_PASSWORD: "TEST_ONLY_NOT_FOR_PRODUCTION_db"
+      MYSQL_DATABASE: "tripforge"
+      MYSQL_ROOT_PASSWORD: "TEST_ONLY_NOT_FOR_PRODUCTION_root"

@@ -191,8 +191,10 @@ export async function getSharedItineraryHandler(req: Request, res: Response, nex
     });
 
     if (!itinerary || !itinerary.shareExpiresAt || itinerary.shareExpiresAt < new Date()) {
-      res.status(404).json({ message: 'Shared itinerary not found or link has expired' });
-      return;
+      // Route through the global AppError handler so the response carries
+      // the canonical envelope (statusCode/code/message/requestId) instead
+      // of an ad-hoc { message } body. Audit issue 4.
+      throw new AppError(404, NOT_FOUND, 'Shared itinerary not found or link has expired');
     }
 
     res.status(200).json(itinerary);
@@ -217,8 +219,8 @@ export async function exportItineraryHandler(req: Request, res: Response, next: 
     });
 
     if (!itinerary) {
-      res.status(404).json({ message: 'Itinerary not found' });
-      return;
+      // Same canonical-envelope routing as the shared handler above.
+      throw new AppError(404, NOT_FOUND, 'Itinerary not found');
     }
 
     res.status(200).json({
