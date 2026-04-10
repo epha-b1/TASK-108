@@ -189,11 +189,14 @@ describe('GET /itineraries/:id/versions', () => {
 });
 
 // === Versioning semantics ===
-// Business rules under test:
+// Business rules under test (aligned with the prompt requirement that
+// "every save creates a versioned revision record"):
 //   1. POST /itineraries creates a version 1 snapshot at creation time.
-//   2. PATCH /itineraries/:id with ONLY status change does NOT create a new version.
-//   3. PATCH /itineraries/:id that mutates content fields (title/destination/dates)
-//      DOES create a new version.
+//   2. PATCH /itineraries/:id with ONLY a status change DOES create a new
+//      version with a single `status` entry in `diffMetadata.metadata`.
+//   3. PATCH /itineraries/:id that mutates content fields (title/destination/
+//      dates) DOES create a new version with a content diff entry.
+//   4. Item add / update / delete each cut a new version too.
 describe('Itinerary versioning semantics', () => {
   let verItinId: string;
 
@@ -240,11 +243,12 @@ describe('Itinerary versioning semantics', () => {
   });
 
 
-  it('PATCH status only — does NOT create a new version', async () => {
+  it('PATCH status only — DOES create a new version with a status diff', async () => {
     const before = await request(app)
       .get(`/itineraries/${verItinId}/versions`)
       .set('Authorization', `Bearer ${orgAToken}`);
     const beforeCount = before.body.length;
+    const beforeMax = Math.max(...before.body.map((v: { versionNumber: number }) => v.versionNumber));
 
     const patchRes = await request(app)
       .patch(`/itineraries/${verItinId}`)
@@ -258,11 +262,26 @@ describe('Itinerary versioning semantics', () => {
       .get(`/itineraries/${verItinId}/versions`)
       .set('Authorization', `Bearer ${orgAToken}`);
     expect(after.status).toBe(200);
-    expect(after.body.length).toBe(beforeCount);
-    // Highest versionNumber unchanged.
-    const maxBefore = Math.max(...before.body.map((v: { versionNumber: number }) => v.versionNumber));
-    const maxAfter = Math.max(...after.body.map((v: { versionNumber: number }) => v.versionNumber));
-    expect(maxAfter).toBe(maxBefore);
+    // Per the prompt requirement, status-only saves create a versioned
+    // revision record too.
+    expect(after.body.length).toBe(beforeCount + 1);
+    const sorted = [...after.body].sort(
+      (a: { versionNumber: number }, b: { versionNumber: number }) => b.versionNumber - a.versionNumber,
+    );
+    const newest = sorted[0];
+    expect(newest.versionNumber).toBe(beforeMax + 1);
+    // Snapshot reflects the new status.
+    expect(newest.snapshot.metadata.status).toBe('published');
+    // Diff should record the lifecycle transition under metadata.
+    const metaChanges = newest.diffMetadata?.metadata ?? [];
+    const statusChange = metaChanges.find((c: { field: string }) => c.field === 'status');
+    expect(statusChange).toBeDefined();
+    expect(statusChange.from).toBe('draft');
+    expect(statusChange.to).toBe('published');
+    // Item list unchanged.
+    expect(newest.diffMetadata?.items?.added?.length ?? 0).toBe(0);
+    expect(newest.diffMetadata?.items?.removed?.length ?? 0).toBe(0);
+    expect(newest.diffMetadata?.items?.modified?.length ?? 0).toBe(0);
   });
 
   it('PATCH content (title) — creates a version with metadata diff', async () => {
@@ -429,6 +448,67 @@ describe('Cross-user authorization', () => {
     const res = await request(app).get('/itineraries').set('Authorization', `Bearer ${orgBToken}`);
     expect(res.status).toBe(200);
     expect(res.body.data.length).toBe(0);
+  });
+});
+
+// === Bidirectional travel-time feasibility ===
+// The audit flagged that only prev→new was checked; new→next was missing.
+// This test proves the fix: an item that fits after the previous item but
+// violates travel time to the next item is correctly rejected.
+describe('Bidirectional travel-time check (new→next)', () => {
+  let ttItinId: string;
+
+  afterAll(async () => {
+    if (ttItinId) {
+      await prisma.itineraryItem.deleteMany({ where: { itineraryId: ttItinId } }).catch(() => {});
+      await prisma.itineraryVersion.deleteMany({ where: { itineraryId: ttItinId } }).catch(() => {});
+      await prisma.itinerary.deleteMany({ where: { id: ttItinId } }).catch(() => {});
+    }
+  });
+
+  it('409 — new item violates travel time to next item', async () => {
+    // Create a travel-time matrix: res1 → res2 takes 45 min.
+    await request(app)
+      .post('/travel-times')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ fromResourceId: resourceId, toResourceId: resourceId2, travelMinutes: 45, transportMode: 'walking' });
+
+    // Also create res2 → res1 takes 45 min (so we have the new→next entry).
+    await request(app)
+      .post('/travel-times')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ fromResourceId: resourceId2, toResourceId: resourceId, travelMinutes: 45, transportMode: 'walking' });
+
+    // Create an itinerary with a single item that uses res1 at 14:00-15:00.
+    const itin = await request(app)
+      .post('/itineraries')
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ title: `TT Trip ${ts}`, destination: 'TTCity', startDate: '2026-06-01', endDate: '2026-06-05' });
+    ttItinId = itin.body.id;
+
+    // Add the "next" item at 14:00-15:00 using res1 (will become the next
+    // item after we try to insert before it).
+    const nextItem = await request(app)
+      .post(`/itineraries/${ttItinId}/items`)
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ resourceId, dayNumber: 1, startTime: '14:00', endTime: '15:00' });
+    expect(nextItem.status).toBe(201);
+
+    // Now try to insert an item using res2 at 12:00-13:30 on the same day.
+    // Gap from 13:30 to 14:00 is only 30 min, but travel res2→res1 takes
+    // 45 min. The prev→new direction has no previous item, so it passes.
+    // The new→next direction should reject with 409.
+    const insertRes = await request(app)
+      .post(`/itineraries/${ttItinId}/items`)
+      .set('Authorization', `Bearer ${orgAToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ resourceId: resourceId2, dayNumber: 1, startTime: '12:00', endTime: '13:30' });
+    expect(insertRes.status).toBe(409);
+    expect(insertRes.body.message).toMatch(/travel time.*next/i);
   });
 });
 

@@ -6,10 +6,35 @@ import { importLog } from '../utils/logger';
 export async function downloadTemplateHandler(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const entityType = req.params.entityType as string;
-    const buffer = await importService.downloadTemplate(entityType);
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${entityType}-template.xlsx"`);
-    res.status(200).send(buffer);
+
+    // Format selection: explicit `?format=csv|xlsx` query param wins; otherwise
+    // we honour the Accept header so a `text/csv` request gets a CSV without
+    // having to know the query-param contract. Defaults to xlsx for backwards
+    // compatibility with the historical XLSX-only behaviour.
+    const queryFormat = String(req.query.format ?? '').toLowerCase();
+    let format: 'csv' | 'xlsx';
+    if (queryFormat === 'csv' || queryFormat === 'xlsx') {
+      format = queryFormat;
+    } else if (queryFormat) {
+      res.status(400).json({
+        statusCode: 400,
+        code: 'VALIDATION_ERROR',
+        message: 'format must be one of: csv, xlsx',
+      });
+      return;
+    } else {
+      const accept = String(req.headers.accept ?? '').toLowerCase();
+      if (accept.includes('text/csv')) {
+        format = 'csv';
+      } else {
+        format = 'xlsx';
+      }
+    }
+
+    const bundle = await importService.downloadTemplate(entityType, format);
+    res.setHeader('Content-Type', bundle.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${bundle.filename}"`);
+    res.status(200).send(bundle.body);
   } catch (err) {
     next(err);
   }

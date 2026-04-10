@@ -14,13 +14,20 @@ import {
 
 const router = Router();
 
-router.get('/notifications', authMiddleware, listNotificationsHandler);
-router.patch('/notifications/:id/read', authMiddleware, markReadHandler);
+// Permission matrix:
+//   notification:read   → list own notifications, list templates, mark read
+//   notification:write  → send notification
+//   admin role          → stats, template create/update
+// `notification:read` is enforced consistently on read endpoints so an account
+// without the permission point cannot use the API to enumerate notification
+// state, even if its JWT is valid.
+router.get('/notifications', authMiddleware, requirePermission('notification:read'), listNotificationsHandler);
+router.patch('/notifications/:id/read', authMiddleware, requirePermission('notification:read'), markReadHandler);
 router.get('/notifications/stats', authMiddleware, requireRole('admin'), getStatsHandler);
 
 router.post('/notifications', authMiddleware, requirePermission('notification:write'), validate(sendNotificationSchema), sendNotificationHandler);
 
-router.get('/notification-templates', authMiddleware, listTemplatesHandler);
+router.get('/notification-templates', authMiddleware, requirePermission('notification:read'), listTemplatesHandler);
 router.post('/notification-templates', authMiddleware, requireRole('admin'), validate(createTemplateSchema), createTemplateHandler);
 router.patch('/notification-templates/:id', authMiddleware, requireRole('admin'), validate(updateTemplateSchema), updateTemplateHandler);
 

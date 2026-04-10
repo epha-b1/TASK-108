@@ -39,8 +39,17 @@ beforeAll(async () => {
     .send({ ...orgCreds, securityQuestions: [{ question: 'Q1?', answer: 'a1' }, { question: 'Q2?', answer: 'a2' }] });
   orgUserId = orgReg.body.id;
 
-  // Setup RBAC for org user
-  const orgPerms = ['itinerary:read', 'itinerary:write', 'resource:read', 'model:read', 'notification:read'];
+  // Setup RBAC for org user. The permission set was widened to mirror the
+  // shipped organizer baseline (now includes import:read so the cross-user
+  // isolation test below actually exercises *object*-level enforcement, not
+  // a route-level permission gate).
+  const orgPerms = [
+    'itinerary:read', 'itinerary:write',
+    'resource:read',
+    'import:read', 'import:write',
+    'model:read',
+    'notification:read',
+  ];
   const ppIds: string[] = [];
   for (const code of orgPerms) {
     const pp = await prisma.permissionPoint.upsert({ where: { code }, update: {}, create: { code } });

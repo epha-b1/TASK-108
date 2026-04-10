@@ -12,7 +12,10 @@
  *     travel time) via addItem.
  *   - createVersion snapshot fidelity: metadata + items both present and
  *     diff metadata reports both kinds of change.
- *   - status-only PATCH does NOT cut a version, content PATCH does.
+ *   - every PATCH (including status-only) cuts a versioned revision record,
+ *     per the prompt requirement that "every save creates a versioned
+ *     revision record". The status-only path is asserted explicitly so
+ *     a regression that drops it would fail this test.
  *
  * Where the service does ownership / role checks we pass an "admin" role so
  * the test stays focused on the business logic and not authz wiring.
@@ -217,6 +220,44 @@ describe('itinerary.service.addItem — validateItem rules', () => {
     ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
   });
 
+  it('rejects when travel time to the NEXT item exceeds the gap (new→next check)', async () => {
+    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+    prisma.resource.findUnique.mockResolvedValue(makeResource());
+    // Existing item at 14:00-15:00 using resource 'res-9' (this is the "next" item).
+    prisma.itineraryItem.findMany.mockResolvedValue([
+      {
+        id: 'next-item',
+        itineraryId: 'itin-1',
+        resourceId: 'res-9',
+        dayNumber: 1,
+        startTime: '14:00',
+        endTime: '15:00',
+        notes: null,
+        position: 0,
+        resource: makeResource({ id: 'res-9' }),
+      },
+    ]);
+    // No previous item ends before 12:00 so the prev→new lookup is skipped.
+    // The ONLY findFirst call is new→next: res-1 → res-9 = 45 min.
+    prisma.travelTimeMatrix.findFirst.mockResolvedValue({
+      id: 'tt2',
+      fromResourceId: 'res-1',
+      toResourceId: 'res-9',
+      transportMode: 'walking',
+      travelMinutes: 45,
+    });
+
+    // New item 12:00-13:30, gap to next (14:00) = 30 min, need 45 → reject.
+    await expect(
+      itineraryService.addItem('itin-1', 'user-1', 'admin', {
+        resourceId: 'res-1',
+        dayNumber: 1,
+        startTime: '12:00',
+        endTime: '13:30',
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, code: 'CONFLICT' });
+  });
+
   it('accepts a well-spaced item and persists it via prisma.itineraryItem.create', async () => {
     prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
     prisma.resource.findUnique.mockResolvedValue(makeResource());
@@ -253,13 +294,46 @@ describe('itinerary.service.addItem — validateItem rules', () => {
 });
 
 describe('itinerary.service.updateItinerary — versioning', () => {
-  it('does NOT cut a version on a status-only update', async () => {
-    prisma.itinerary.findUnique.mockResolvedValue(makeItinerary());
+  it('cuts a new version on a status-only update with a status diff entry', async () => {
+    prisma.itinerary.findUnique
+      // 1) enforceOwnership lookup
+      .mockResolvedValueOnce(makeItinerary())
+      // 2) createVersion lookup (after .update writes the new status)
+      .mockResolvedValueOnce(makeItinerary({ status: 'published' }));
     prisma.itinerary.update.mockResolvedValue(makeItinerary({ status: 'published' }));
+    prisma.itineraryItem.findMany.mockResolvedValue([]);
+    prisma.itineraryVersion.findFirst.mockResolvedValue({
+      versionNumber: 1,
+      snapshot: {
+        schemaVersion: 2,
+        metadata: {
+          id: 'itin-1',
+          ownerId: 'user-1',
+          title: 'Trip',
+          destination: 'Paris',
+          startDate: FIXED_START.toISOString(),
+          endDate: new Date('2026-06-05T00:00:00.000Z').toISOString(),
+          status: 'draft',
+        },
+        items: [],
+      },
+    });
+    prisma.itineraryVersion.create.mockResolvedValue({ versionNumber: 2 });
 
     await itineraryService.updateItinerary('itin-1', 'user-1', 'admin', { status: 'published' });
 
-    expect(prisma.itineraryVersion.create).not.toHaveBeenCalled();
+    // Per the prompt, every save creates a versioned revision record —
+    // including status-only lifecycle transitions.
+    expect(prisma.itineraryVersion.create).toHaveBeenCalled();
+    const call = prisma.itineraryVersion.create.mock.calls[0][0];
+    expect(call.data.versionNumber).toBe(2);
+    expect(call.data.snapshot.metadata.status).toBe('published');
+    const metaChanges = call.data.diffMetadata.metadata as Array<{ field: string; from: unknown; to: unknown }>;
+    expect(metaChanges.find((c) => c.field === 'status')).toEqual({
+      field: 'status',
+      from: 'draft',
+      to: 'published',
+    });
   });
 
   it('cuts a new version on a content (title) update', async () => {

@@ -382,9 +382,24 @@ export const apiSpec: any = {
     },
     '/import/templates/{entityType}': {
       get: {
-        tags: ['Import'], summary: 'Download Excel template (public)', security: [],
-        parameters: [{ in: 'path', name: 'entityType', required: true, schema: { type: 'string', enum: ['resources', 'itineraries'] } }],
-        responses: { '200': { description: 'Template file (xlsx)' } },
+        tags: ['Import'], summary: 'Download Excel/CSV template (public)', security: [],
+        parameters: [
+          { in: 'path', name: 'entityType', required: true, schema: { type: 'string', enum: ['resources', 'itineraries'] } },
+          {
+            in: 'query', name: 'format', required: false,
+            schema: { type: 'string', enum: ['xlsx', 'csv'], default: 'xlsx' },
+            description: 'Template format. Defaults to xlsx. Pass `csv` for the CSV variant. Format can also be selected via the Accept header (`text/csv` → CSV).',
+          },
+        ],
+        responses: {
+          '200': {
+            description: 'Template file (xlsx or csv depending on `format`)',
+            content: {
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { schema: { type: 'string', format: 'binary' } },
+              'text/csv': { schema: { type: 'string' } },
+            },
+          },
+        },
       },
     },
     '/import/upload': {

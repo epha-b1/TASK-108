@@ -15,9 +15,16 @@ const ADMIN_PERMISSIONS = [
   'audit:read', 'audit:export',
 ];
 
+// The organizer baseline gives a self-service planner the minimum permission
+// points needed to: plan and edit itineraries, browse the resource catalog,
+// upload data via the import flow, run model inferences, and read their own
+// notifications. The set is intentionally narrower than admin (no `:delete`,
+// no `:write` on resources/models, no audit access).
 const ORGANIZER_PERMISSIONS = [
   'itinerary:read', 'itinerary:write',
   'resource:read',
+  'import:read', 'import:write',
+  'model:read',
   'notification:read',
 ];
 

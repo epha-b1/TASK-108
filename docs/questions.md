@@ -35,8 +35,8 @@ Solution: `travel_time_matrices` stores directed pairs. Validation service looks
 
 ## 7) Itinerary Versioning — What Triggers a New Version?
 Question: The prompt says "every save creates a versioned revision record." Does this mean every PATCH to the itinerary, or only when items are added/removed/moved?
-My Understanding/Hypothesis: A new version is created on every mutation that changes the itinerary's content: adding/removing/updating items, and updating itinerary metadata (title, dates). Simple status changes (draft → published) do not create a new version.
-Solution: Version creation is triggered in the service layer after any content-changing operation. Diff metadata compares the new snapshot to the previous version's snapshot.
+My Understanding/Hypothesis: Taking the prompt literally, every PATCH to the itinerary creates a versioned revision — including status-only lifecycle transitions (draft → published → archived). This preserves a full audit-friendly history of the itinerary's lifecycle.
+Solution: Version creation is triggered in the service layer after *every* save operation: content changes (title, destination, dates), item mutations (add/update/remove), and status transitions. The `diffMetadata.metadata` array shows exactly which fields changed per version, so consumers can distinguish lifecycle changes from content edits.
 
 ## 8) Share Token — Can It Be Revoked?
 Question: The prompt says share tokens are valid for 7 days. Can the owner revoke a share token before it expires?
@@ -65,8 +65,8 @@ Solution: Registration validates that exactly 2 security questions are provided.
 
 ## 13) Idempotency Keys — Which Operations Require Them?
 Question: The prompt says "idempotency keys for all mutating operations." Does this mean every POST/PATCH/DELETE, or only specific high-risk operations?
-My Understanding/Hypothesis: Idempotency keys are required on: order-like operations (import upload/commit), model inference calls, and any operation explicitly marked in the API spec. Standard CRUD (create resource, update itinerary) does not require idempotency keys unless the client provides one voluntarily.
-Solution: Idempotency middleware checks for `Idempotency-Key` header on POST requests. If present, stores and deduplicates. Required on: `POST /import/upload`, `POST /import/:id/commit`. Optional on all other POSTs.
+My Understanding/Hypothesis: The prompt is unambiguous — idempotency keys are required for **all** mutating operations (POST, PATCH, DELETE). This prevents duplicate mutations from network retries and ensures audit-safe replay semantics.
+Solution: Idempotency middleware requires the `Idempotency-Key` header on every POST, PATCH, and DELETE request. Missing header → 400 `MISSING_IDEMPOTENCY_KEY`. Same key + same actor + same payload → cached response replayed. Same key + different payload → 409 `IDEMPOTENCY_CONFLICT`.
 
 ## 14) A/B Allocation — How Is the Group Determined?
 Question: The prompt mentions A/B allocations and canary rollouts for models. How is a user assigned to a group?

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { getPrisma } from '../config/database';
 import { AppError, NOT_FOUND, FORBIDDEN, VALIDATION_ERROR } from '../utils/errors';
+import { audit } from '../services/audit.service';
 
 export async function listUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -75,6 +76,11 @@ export async function updateUser(req: Request, res: Response, next: NextFunction
       select: { id: true, username: true, role: true, status: true },
     });
 
+    audit(req, 'user.update', 'user', req.params.id as string, {
+      previousStatus: user.status,
+      newStatus: status,
+    });
+
     res.json(updated);
   } catch (err) {
     next(err);
@@ -88,6 +94,13 @@ export async function deleteUser(req: Request, res: Response, next: NextFunction
     if (!user) {
       throw new AppError(404, NOT_FOUND, 'User not found');
     }
+
+    // Emit the audit entry BEFORE the cascade deletes wipe the actor trail.
+    // The row is fire-and-forget (audit never blocks the mutation), so even
+    // if the delete fails afterwards the intent is captured.
+    audit(req, 'user.delete', 'user', user.id, {
+      username: user.username,
+    });
 
     // Clean up related records
     await prisma.refreshToken.deleteMany({ where: { userId: user.id } });

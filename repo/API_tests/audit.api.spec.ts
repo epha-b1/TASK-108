@@ -179,6 +179,57 @@ describe('Audit completeness — critical mutations', () => {
 
     await prisma.mlModel.delete({ where: { id: create.body.id } }).catch(() => {});
   });
+
+  it('user.update lands in audit_logs after PATCH /users/:id', async () => {
+    // Create a throw-away user to update
+    const userCreds = { username: `audit_usr_upd_${ts}`, password: 'AuditUserUpd123!x' };
+    const reg = await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send({
+      ...userCreds,
+      securityQuestions: [{ question: 'Q1?', answer: 'a1' }, { question: 'Q2?', answer: 'a2' }],
+    });
+    const uid = reg.body.id;
+
+    await request(app)
+      .patch(`/users/${uid}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid())
+      .send({ status: 'suspended' });
+
+    // Allow a moment for fire-and-forget audit to flush
+    await new Promise((r) => setTimeout(r, 200));
+
+    const row = await findAuditAction('user.update');
+    expect(row).not.toBeNull();
+    expect((row!.detail as { newStatus: string }).newStatus).toBe('suspended');
+
+    // cleanup
+    await prisma.refreshToken.deleteMany({ where: { userId: uid } }).catch(() => {});
+    await prisma.device.deleteMany({ where: { userId: uid } }).catch(() => {});
+    await prisma.securityQuestion.deleteMany({ where: { userId: uid } }).catch(() => {});
+    await prisma.passwordHistory.deleteMany({ where: { userId: uid } }).catch(() => {});
+    await prisma.userRole.deleteMany({ where: { userId: uid } }).catch(() => {});
+    await prisma.user.deleteMany({ where: { id: uid } }).catch(() => {});
+  });
+
+  it('user.delete lands in audit_logs after DELETE /users/:id', async () => {
+    const userCreds = { username: `audit_usr_del_${ts}`, password: 'AuditUserDel123!x' };
+    const reg = await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send({
+      ...userCreds,
+      securityQuestions: [{ question: 'Q1?', answer: 'a1' }, { question: 'Q2?', answer: 'a2' }],
+    });
+    const uid = reg.body.id;
+
+    await request(app)
+      .delete(`/users/${uid}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Idempotency-Key', uuid());
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const row = await findAuditAction('user.delete');
+    expect(row).not.toBeNull();
+    expect((row!.detail as { username: string }).username).toBe(userCreds.username);
+  });
 });
 
 // === Audit immutability ===

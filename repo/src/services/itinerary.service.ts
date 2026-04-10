@@ -26,12 +26,12 @@ async function enforceOwnership(itineraryId: string, userId: string, role: strin
 /**
  * Itinerary metadata fields that participate in version snapshots and diffs.
  *
- * `status` is intentionally NOT in this list — status-only updates are routine
- * lifecycle transitions (draft → published → archived) and shouldn't burn a
- * new version. The "should we cut a new version?" decision in updateItinerary
- * only triggers on these content fields.
+ * Per the prompt requirement "every save creates a versioned revision record",
+ * `status` IS included here so a draft → published → archived transition
+ * leaves an audit-friendly history entry alongside content edits. The diff
+ * compares all of these fields between consecutive snapshots.
  */
-const VERSIONED_METADATA_FIELDS = ['title', 'destination', 'startDate', 'endDate'] as const;
+const VERSIONED_METADATA_FIELDS = ['title', 'destination', 'startDate', 'endDate', 'status'] as const;
 
 interface ItineraryMetadataSnapshot {
   id: string;
@@ -170,8 +170,10 @@ async function createVersion(itineraryId: string, userId: string) {
       })
       .map((i) => i.id);
 
-    // Metadata-level diff. Only the versioned fields participate — status is
-    // tracked in snapshot but not in the diff so a status-only PATCH is a no-op.
+    // Metadata-level diff. All versioned fields (including `status`)
+    // participate, so a status-only PATCH cuts a versioned record with a
+    // single status entry in `metadata`. Consumers can still tell content
+    // changes apart from lifecycle changes by inspecting the `field` value.
     const metadataChanges: MetadataDiff[] = [];
     if (prev.schemaVersion >= 2) {
       const prevMeta = prev.metadata as unknown as Record<string, unknown>;
@@ -303,8 +305,17 @@ async function validateItem(
     }
   }
 
-  // 7. Travel time from previous item
-  // Find the item that ends right before our start
+  // 7. Bidirectional travel-time feasibility.
+  //
+  // The previous implementation only validated `previous → new`, so a
+  // schedule could be accepted where the new item leaves insufficient time
+  // to walk to the *next* item on the same day. The audit flagged this as a
+  // High-severity correctness gap. We now check both adjacencies whenever
+  // the matching travel-time matrix entry exists. Missing matrix entries
+  // mean "no constraint" — same semantics as before, documented in
+  // docs/questions.md §6.
+
+  // 7a. previous → new
   const previousItem = existingItems
     .filter((i) => timeToMinutes(i.endTime) <= startMin)
     .sort((a, b) => timeToMinutes(b.endTime) - timeToMinutes(a.endTime))[0];
@@ -325,6 +336,32 @@ async function validateItem(
           409,
           CONFLICT,
           `Insufficient travel time from previous item (need ${travelTime.travelMinutes}min, have ${gap}min)`,
+        );
+      }
+    }
+  }
+
+  // 7b. new → next
+  const nextItem = existingItems
+    .filter((i) => timeToMinutes(i.startTime) >= endMin)
+    .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime))[0];
+
+  if (nextItem) {
+    const travelTime = await prisma.travelTimeMatrix.findFirst({
+      where: {
+        fromResourceId: resourceId,
+        toResourceId: nextItem.resourceId,
+      },
+    });
+
+    if (travelTime) {
+      const nextStart = timeToMinutes(nextItem.startTime);
+      const gap = nextStart - endMin;
+      if (gap < travelTime.travelMinutes) {
+        throw new AppError(
+          409,
+          CONFLICT,
+          `Insufficient travel time to next item (need ${travelTime.travelMinutes}min, have ${gap}min)`,
         );
       }
     }
@@ -401,12 +438,8 @@ export async function updateItinerary(
   role: string,
   data: Record<string, unknown>,
 ) {
-  const itinerary = await enforceOwnership(id, userId, role);
+  await enforceOwnership(id, userId, role);
   const prisma = getPrisma();
-
-  // Determine if this is a content change (not just status)
-  const contentFields = ['title', 'destination', 'startDate', 'endDate'];
-  const isContentChange = contentFields.some((f) => f in data);
 
   // Normalize date fields
   const updateData: Record<string, unknown> = { ...data };
@@ -415,9 +448,11 @@ export async function updateItinerary(
 
   const updated = await prisma.itinerary.update({ where: { id }, data: updateData });
 
-  if (isContentChange) {
-    await createVersion(id, userId);
-  }
+  // Per the prompt requirement, every save creates a versioned revision
+  // record — including status-only lifecycle transitions. The diff metadata
+  // distinguishes between status changes and content changes so consumers
+  // can still tell them apart in the version history.
+  await createVersion(id, userId);
 
   return updated;
 }

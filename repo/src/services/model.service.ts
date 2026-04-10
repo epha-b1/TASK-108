@@ -7,6 +7,8 @@ import {
   CONFLICT,
 } from '../utils/errors';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
 
 /* ---------- Types ---------- */
 
@@ -61,17 +63,115 @@ export interface ModelAdapter {
 const ADAPTER_MODE = process.env.MODEL_ADAPTER_MODE
   || (process.env.NODE_ENV === 'production' ? 'process' : 'mock');
 const PROCESS_TIMEOUT_MS = 30_000;
+
+// Allowlists for both interpreter binaries and the bundled fixed-runner
+// scripts that they execute. Inputs from the model registry never reach the
+// command line as code — they only flow through `args` (validated below).
 const ALLOWED_EXECUTABLES = ['/usr/bin/java', '/usr/bin/python3', '/usr/local/bin/python3'];
+
+// Fixed runner scripts. Both are checked into the repo so the python3/java
+// process is given a code path WE control, and the untrusted filePath is
+// passed as a positional argument that the runner reads after `os.path.realpath`
+// validates it lies under MODEL_ROOT. This eliminates the previous
+// `python3 -c '...${filePath}...'` interpolation injection vector.
+//
+// The runner is resolved relative to repo root so it works in both ts-node
+// (dev/test) and compiled (production) execution contexts.
+function repoRoot(): string {
+  // src/services -> ../../  (works for both dist and src layouts)
+  return path.resolve(__dirname, '..', '..');
+}
+
+const ONNX_RUNNER = path.resolve(repoRoot(), 'scripts', 'onnx_runner.py');
+
+/**
+ * Root directory under which all model artefacts MUST live. Defaults to the
+ * `models/` directory at the repo root, can be overridden via env for the
+ * single-container deployment. Anything outside this root is rejected even
+ * if the operator points the model registry at it.
+ */
+const MODEL_ROOT = process.env.MODEL_ROOT
+  ? path.resolve(process.env.MODEL_ROOT)
+  : path.resolve(repoRoot(), 'models');
+
+/**
+ * Validate that an operator-supplied filePath:
+ *   1. Is a non-empty string.
+ *   2. Has no embedded NUL bytes.
+ *   3. Resolves (after symlink expansion) to a path inside `MODEL_ROOT`.
+ *   4. Has the expected file extension for the model type.
+ *
+ * Throws AppError(400, VALIDATION_ERROR, ...) on any failure. Exported for
+ * unit-testability so the security regression suite can pin its behaviour
+ * directly without constructing a real model adapter call.
+ */
+export function validateModelFilePath(filePath: unknown, expectedExtensions: string[]): string {
+  if (typeof filePath !== 'string' || filePath.length === 0) {
+    throw new AppError(400, VALIDATION_ERROR, 'Model filePath must be a non-empty string');
+  }
+  if (filePath.includes('\0')) {
+    throw new AppError(400, VALIDATION_ERROR, 'Model filePath contains a NUL byte');
+  }
+
+  // Resolve the candidate against MODEL_ROOT (so a relative path is OK), then
+  // make sure the result still lies under MODEL_ROOT after normalisation.
+  const candidate = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(MODEL_ROOT, filePath);
+
+  const rel = path.relative(MODEL_ROOT, candidate);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new AppError(400, VALIDATION_ERROR, 'Model filePath escapes MODEL_ROOT');
+  }
+
+  // Reject symlinks pointing outside MODEL_ROOT — realpath collapses them.
+  let realCandidate: string;
+  try {
+    realCandidate = fs.realpathSync(candidate);
+  } catch {
+    throw new AppError(400, VALIDATION_ERROR, 'Model file not found or unreadable');
+  }
+  const realRel = path.relative(MODEL_ROOT, realCandidate);
+  if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+    throw new AppError(400, VALIDATION_ERROR, 'Model file (via symlink) escapes MODEL_ROOT');
+  }
+
+  const ext = path.extname(realCandidate).toLowerCase();
+  if (expectedExtensions.length > 0 && !expectedExtensions.includes(ext)) {
+    throw new AppError(
+      400,
+      VALIDATION_ERROR,
+      `Model filePath must have one of these extensions: ${expectedExtensions.join(', ')}`,
+    );
+  }
+
+  return realCandidate;
+}
 
 function spawnAdapter(executable: string, args: string[], input: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    if (!ALLOWED_EXECUTABLES.some((e) => executable.startsWith(e))) {
+    if (!ALLOWED_EXECUTABLES.some((allowed) => executable === allowed)) {
+      // Strict equality (not startsWith) so callers can't sneak through with
+      // `/usr/bin/java-evil-shim`.
       reject(new Error(`Executable not in allowlist: ${executable}`));
       return;
     }
+    for (const a of args) {
+      if (typeof a !== 'string') {
+        reject(new Error('All adapter arguments must be strings'));
+        return;
+      }
+      if (a.includes('\0')) {
+        reject(new Error('Adapter argument contains a NUL byte'));
+        return;
+      }
+    }
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { spawn } = require('child_process');
-    const proc = spawn(executable, args, { timeout: PROCESS_TIMEOUT_MS });
+    // shell: false (default) — args are passed verbatim to execve, never
+    // interpreted by /bin/sh, so quoting/metachars in `args` cannot escape
+    // into a shell. This is the structural fix for the previous `-c` injection.
+    const proc = spawn(executable, args, { timeout: PROCESS_TIMEOUT_MS, shell: false });
     let stdout = '';
     let stderr = '';
     proc.stdin.write(input);
@@ -89,8 +189,9 @@ function spawnAdapter(executable: string, args: string[], input: string): Promis
 class PmmlAdapter implements ModelAdapter {
   async infer(input: Record<string, unknown>, config: ModelConfig | null): Promise<AdapterResult> {
     if (ADAPTER_MODE === 'mock') return mockInferFn(input, config);
-    const filePath = (config as Record<string, unknown>)?.filePath as string;
-    if (!filePath) throw new AppError(400, VALIDATION_ERROR, 'PMML model filePath not configured');
+    const rawFilePath = (config as Record<string, unknown>)?.filePath;
+    if (!rawFilePath) throw new AppError(400, VALIDATION_ERROR, 'PMML model filePath not configured');
+    const filePath = validateModelFilePath(rawFilePath, ['.jar', '.pmml']);
     const raw = await spawnAdapter('/usr/bin/java', ['-jar', filePath], JSON.stringify(input));
     return JSON.parse(raw);
   }
@@ -99,9 +200,12 @@ class PmmlAdapter implements ModelAdapter {
 class OnnxAdapter implements ModelAdapter {
   async infer(input: Record<string, unknown>, config: ModelConfig | null): Promise<AdapterResult> {
     if (ADAPTER_MODE === 'mock') return mockInferFn(input, config);
-    const filePath = (config as Record<string, unknown>)?.filePath as string;
-    if (!filePath) throw new AppError(400, VALIDATION_ERROR, 'ONNX model filePath not configured');
-    const raw = await spawnAdapter('/usr/bin/python3', ['-c', `import onnxruntime,sys,json;s=onnxruntime.InferenceSession('${filePath}');print(json.dumps(s.run(None,json.loads(sys.stdin.read()))))`], JSON.stringify(input));
+    const rawFilePath = (config as Record<string, unknown>)?.filePath;
+    if (!rawFilePath) throw new AppError(400, VALIDATION_ERROR, 'ONNX model filePath not configured');
+    const filePath = validateModelFilePath(rawFilePath, ['.onnx']);
+    // Pass the path as a positional argument to a fixed runner script we
+    // control. No string interpolation, no `python3 -c`, no shell.
+    const raw = await spawnAdapter('/usr/bin/python3', [ONNX_RUNNER, filePath], JSON.stringify(input));
     return JSON.parse(raw);
   }
 }
@@ -112,6 +216,16 @@ class CustomAdapter implements ModelAdapter {
     const command = (config as Record<string, unknown>)?.command as string;
     const args = ((config as Record<string, unknown>)?.args as string[]) ?? [];
     if (!command) throw new AppError(400, VALIDATION_ERROR, 'Custom model command not configured');
+    if (!ALLOWED_EXECUTABLES.includes(command)) {
+      throw new AppError(
+        400,
+        VALIDATION_ERROR,
+        'Custom adapter command must be one of the allowlisted interpreter binaries',
+      );
+    }
+    if (!Array.isArray(args)) {
+      throw new AppError(400, VALIDATION_ERROR, 'Custom adapter args must be an array of strings');
+    }
     const raw = await spawnAdapter(command, args, JSON.stringify(input));
     return JSON.parse(raw);
   }

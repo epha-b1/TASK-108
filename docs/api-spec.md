@@ -1033,14 +1033,29 @@ paths:
           schema:
             type: string
             enum: [resources, itineraries]
+        - in: query
+          name: format
+          required: false
+          schema:
+            type: string
+            enum: [xlsx, csv]
+            default: xlsx
+          description: |
+            Template format. Defaults to `xlsx` for backwards compatibility.
+            Pass `csv` for the CSV variant. Format can also be selected via
+            the `Accept` request header — `text/csv` returns CSV, anything
+            else returns XLSX.
       responses:
         "200":
-          description: Template file
+          description: Template file (xlsx or csv depending on the `format` query parameter)
           content:
             application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
               schema:
                 type: string
                 format: binary
+            text/csv:
+              schema:
+                type: string
 
   /import/upload:
     post:

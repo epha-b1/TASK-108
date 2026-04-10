@@ -60,6 +60,9 @@ router.get('/import/templates/:entityType', downloadTemplateHandler);
 router.post('/import/upload', authMiddleware, requirePermission('import:write'), upload.single('file'), validateUploadFields, uploadHandler);
 router.post('/import/:batchId/commit', authMiddleware, requirePermission('import:write'), validateBatchIdParam, commitHandler);
 router.post('/import/:batchId/rollback', authMiddleware, requirePermission('import:write'), validateBatchIdParam, rollbackHandler);
-router.get('/import/:batchId', authMiddleware, getBatchStatusHandler);
+// Read endpoints are now protected by `import:read` so a token without the
+// permission point cannot poll batch status. Object-level isolation is still
+// enforced inside the service.
+router.get('/import/:batchId', authMiddleware, requirePermission('import:read'), getBatchStatusHandler);
 
 export default router;

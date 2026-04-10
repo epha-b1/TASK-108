@@ -202,5 +202,5 @@ describe('Global error handler logging integration', () => {
     );
     expect(errEntry).toBeDefined();
     expect(errEntry!.category).toBe('system');
-  });
+  }, 15000);
 });

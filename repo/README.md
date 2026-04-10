@@ -182,12 +182,16 @@ This is enforced uniformly by:
 
 ### Itinerary versioning
 
-Each itinerary version snapshot captures BOTH itinerary metadata
+Per the prompt requirement "every save creates a versioned revision record",
+every PATCH to an itinerary cuts a new version — including status-only
+lifecycle transitions (`draft → published → archived`).
+
+Each version snapshot captures BOTH itinerary metadata
 (`title`, `destination`, `startDate`, `endDate`, `status`, `id`, `ownerId`)
-and items. The `diffMetadata` records both metadata changes and
-item-level adds / removes / modifies, so a status-only PATCH is a no-op
-(no version cut) but renaming or rescheduling cuts a new version with a
-metadata diff entry.
+and items. The `diffMetadata` records both metadata changes and item-level
+adds / removes / modifies. A status-only PATCH produces a version whose
+`diffMetadata.metadata` contains a single `status` entry, so consumers
+can still distinguish lifecycle transitions from content edits.
 
 ### Audit log immutability
 
@@ -283,7 +287,8 @@ encrypted security-question answers, and raw model inference inputs are
 
 ## Contract sync
 
-`docs/api-spec.md` and `src/config/swagger.ts` are kept in sync by the
+`../docs/api-spec.md` (project root `docs/` directory, one level above
+`repo/`) and `src/config/swagger.ts` are kept in sync by the
 `unit_tests/contract_sync.spec.ts` test. Adding or changing an endpoint in
 one file without updating the other causes the unit test suite to fail.
 

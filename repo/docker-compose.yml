@@ -29,7 +29,13 @@ services:
     command: sh -c "npx prisma migrate deploy && node dist/server.js"
 
   db:
-    image: mysql:8
+    # Pin MySQL 8.0 — the 8.4 LTS line removed
+    # `--default-authentication-plugin`, breaking the Prisma client compat
+    # workaround we rely on for `mysql_native_password`.
+    image: mysql:8.0
+    # Force the legacy `mysql_native_password` plugin so the Prisma client
+    # (which doesn't yet speak `caching_sha2_password`) can authenticate.
+    command: ["--default-authentication-plugin=mysql_native_password"]
     ports:
       - "3306:3306"
     environment:

@@ -50,6 +50,30 @@ beforeAll(async () => {
   });
   orgUserId = orgReg.body.id;
 
+  // Seed `notification:read` so the organizer can list/read notifications.
+  // Permission enforcement is now uniform on read routes; organizers without
+  // an explicit permission point would otherwise correctly receive 403.
+  const notifPp = await prisma.permissionPoint.upsert({
+    where: { code: 'notification:read' },
+    update: {},
+    create: { code: 'notification:read' },
+  });
+  const orgRole = await prisma.role.upsert({
+    where: { name: 'organizer' },
+    update: {},
+    create: { name: 'organizer', description: 'Organizer role' },
+  });
+  await prisma.rolePermissionPoint.upsert({
+    where: { roleId_permissionPointId: { roleId: orgRole.id, permissionPointId: notifPp.id } },
+    update: {},
+    create: { roleId: orgRole.id, permissionPointId: notifPp.id },
+  });
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: orgUserId, roleId: orgRole.id } },
+    update: {},
+    create: { userId: orgUserId, roleId: orgRole.id },
+  });
+
   // Login as organizer
   const orgLogin = await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send(orgCreds);
   orgToken = orgLogin.body.accessToken;

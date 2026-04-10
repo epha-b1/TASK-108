@@ -46,11 +46,48 @@ afterAll(async () => {
 });
 
 describe('GET /import/templates/:entityType', () => {
-  it('200 — downloads resources template', async () => {
+  it('200 — downloads resources XLSX template (default)', async () => {
+    const res = await request(app)
+      .get('/import/templates/resources');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/spreadsheetml/);
+    expect(res.headers['content-disposition']).toMatch(/resources-template\.xlsx/);
+  });
+
+  it('200 — downloads resources CSV template via ?format=csv', async () => {
+    const res = await request(app)
+      .get('/import/templates/resources?format=csv');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+    expect(res.headers['content-disposition']).toMatch(/resources-template\.csv/);
+    // CSV body should contain the column headers
+    const body = res.text ?? res.body.toString();
+    expect(body).toMatch(/name/);
+    expect(body).toMatch(/type/);
+    expect(body).toMatch(/city/);
+  });
+
+  it('200 — CSV via Accept: text/csv header', async () => {
     const res = await request(app)
       .get('/import/templates/resources')
-      .set('Authorization', `Bearer ${adminToken}`);
+      .set('Accept', 'text/csv');
     expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/text\/csv/);
+  });
+
+  it('200 — downloads itineraries CSV template', async () => {
+    const res = await request(app)
+      .get('/import/templates/itineraries?format=csv');
+    expect(res.status).toBe(200);
+    const body = res.text ?? res.body.toString();
+    expect(body).toMatch(/title/);
+    expect(body).toMatch(/destination/);
+  });
+
+  it('400 — rejects invalid format query param', async () => {
+    const res = await request(app)
+      .get('/import/templates/resources?format=pdf');
+    expect(res.status).toBe(400);
   });
 });
 
