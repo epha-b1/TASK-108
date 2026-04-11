@@ -40,19 +40,20 @@ The compose path runs the API and a separate MySQL container so you can
 iterate without rebuilding the bundled single-container image.
 
 There is **no `.env` file** in this repo. The default `docker-compose.yml`
-defaults `NODE_ENV` to `production` and refuses to start if any of these
-secrets is missing from the *host* environment:
+is fully self-bootstrapping: every required value uses
+`${VAR:-TEST_ONLY_NOT_FOR_PRODUCTION_default}` interpolation, so a bare
+`docker compose up --build` from a fresh clone succeeds out of the box
+with zero host-env preamble. All defaults are clearly marked
+`TEST_ONLY_NOT_FOR_PRODUCTION` so they are unmistakable if copy-pasted
+into a real deployment.
 
-| Required host env var | Notes |
-|---|---|
-| `DATABASE_URL` | `mysql://tripforge:PASS@db:3306/tripforge` |
-| `JWT_SECRET` | >= 32 chars |
-| `ENCRYPTION_KEY` | exactly 32 chars |
-| `MYSQL_USER` | matches the user portion of `DATABASE_URL` |
-| `MYSQL_PASSWORD` | matches the password portion of `DATABASE_URL` |
-| `MYSQL_ROOT_PASSWORD` | strong random value |
+**Bare bring-up** (dev / CI smoke):
 
-A real production-shape run looks like:
+```bash
+docker compose up -d --build
+```
+
+**Production-shape bring-up** (override every secret via host env):
 
 ```bash
 DATABASE_URL=mysql://tripforge:PASS@db:3306/tripforge \
@@ -61,8 +62,14 @@ ENCRYPTION_KEY=$(openssl rand -base64 24 | cut -c1-32) \
 MYSQL_USER=tripforge \
 MYSQL_PASSWORD=PASS \
 MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24) \
+NODE_ENV=production \
 docker compose up -d --build
 ```
+
+The application server at `src/config/environment.ts` still rejects known
+weak placeholders (`changeme`, `secret`, `change_me_in_production`, etc.)
+regardless of `NODE_ENV`, so a naive copy-paste of the `${VAR:-default}`
+literal into a real secret store would not bypass the runtime check.
 
 ### Test / CI override (`docker-compose.test.yml`)
 

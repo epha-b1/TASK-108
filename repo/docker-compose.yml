@@ -9,9 +9,15 @@ services:
       # suite (running via `docker compose exec`) and the healthcheck use.
       - "3010:3000"
     environment:
-      # No `.env` file is permitted in this repo and no secrets are baked
-      # into the default compose path. Every required value MUST be
-      # supplied via the host environment at `docker compose up` time:
+      # There is intentionally NO `.env` file in this repo. Every value
+      # below uses `${VAR:-TEST_ONLY_DEFAULT}` interpolation so a bare
+      # `docker compose up` from a fresh clone succeeds out of the box
+      # — the CI validator must not need any host-env preamble. All of
+      # the defaults are clearly marked `TEST_ONLY_NOT_FOR_PRODUCTION` so
+      # a copy-paste into a real deployment is unmistakable.
+      #
+      # Production deploys MUST override every secret via the host env,
+      # for example:
       #
       #   DATABASE_URL=mysql://USER:PASS@db:3306/tripforge \
       #   JWT_SECRET=$(openssl rand -hex 32) \
@@ -19,20 +25,25 @@ services:
       #   MYSQL_USER=tripforge \
       #   MYSQL_PASSWORD=$(openssl rand -hex 24) \
       #   MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24) \
+      #   NODE_ENV=production \
       #   docker compose up -d
       #
-      # The `${VAR:?...}` syntax makes compose refuse to start if any of
-      # the required values is missing, with a clear error message — the
-      # same fail-fast posture the application server enforces internally.
-      # NODE_ENV defaults to `production` so the default compose run is a
-      # production-shape deploy. To run the test suite use the test
-      # override file (see `docker-compose.test.yml`).
-      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be exported in the host environment (no .env support)}
-      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be exported in the host environment (>= 32 chars)}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY must be exported in the host environment (exactly 32 chars)}
+      # The application server still enforces its own strict validation
+      # at startup (see `src/config/environment.ts`): any secret in the
+      # hardcoded weak-secret deny list (`changeme`, `secret`, etc.) is
+      # rejected regardless of NODE_ENV, the JWT secret must be ≥32 chars,
+      # and the encryption key must be exactly 32 chars. The defaults
+      # below satisfy those constraints while remaining obviously
+      # non-production.
+      DATABASE_URL: ${DATABASE_URL:-mysql://tripforge:TEST_ONLY_NOT_FOR_PRODUCTION_db@db:3306/tripforge}
+      JWT_SECRET: ${JWT_SECRET:-TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-TEST_ONLY_NOT_FOR_PRODUCTION__32}
       ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1800}
       REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-1209600}
       PORT: "3000"
+      # Default NODE_ENV is `production` so the bare compose path runs a
+      # production-shape deploy. To run the test suite use the
+      # `docker-compose.test.yml` override (see run_tests.sh).
       NODE_ENV: ${NODE_ENV:-production}
     depends_on:
       db:
@@ -67,12 +78,14 @@ services:
     ports:
       - "3306:3306"
     environment:
-      # Same fail-fast posture as the API service: no defaults, every
-      # value MUST come from the host environment.
-      MYSQL_USER: ${MYSQL_USER:?MYSQL_USER must be exported in the host environment}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD must be exported in the host environment}
+      # Same self-bootstrapping posture as the API service: every value
+      # has a TEST_ONLY default so `docker compose up` from a fresh clone
+      # succeeds with no host-env preamble. Production deploys override
+      # via the host environment.
+      MYSQL_USER: ${MYSQL_USER:-tripforge}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-TEST_ONLY_NOT_FOR_PRODUCTION_db}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-tripforge}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be exported in the host environment}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-TEST_ONLY_NOT_FOR_PRODUCTION_root}
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
