@@ -1,0 +1,52 @@
+# Force Unix LF line endings on every checkout, regardless of the host
+# OS or the user's `core.autocrlf` setting.
+#
+# Without this, a Windows clone with the default `core.autocrlf=true`
+# converts LF → CRLF for files git considers "text". The kernel then reads
+# the shebang of `run_tests.sh` as `#!/bin/sh\r` and tries to exec
+# `/bin/sh\r`, which fails with:
+#
+#   zsh: ./run_tests.sh: bad interpreter: /bin/sh^M: no such file or directory
+#
+# The same hazard applies to YAML, JSON, prisma migrations, the Dockerfile,
+# the entrypoint script, and python helpers — anything that's parsed by a
+# tool that treats `\r` as part of a token.
+
+# Default: let git auto-detect text vs binary, but normalise text to LF
+# in the repo and on checkout.
+* text=auto eol=lf
+
+# Explicit LF for everything that breaks under CRLF.
+*.sh        text eol=lf
+*.py        text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.json      text eol=lf
+*.md        text eol=lf
+*.ts        text eol=lf
+*.tsx       text eol=lf
+*.js        text eol=lf
+*.cjs       text eol=lf
+*.mjs       text eol=lf
+*.sql       text eol=lf
+*.prisma    text eol=lf
+Dockerfile  text eol=lf
+docker/*    text eol=lf
+scripts/*   text eol=lf
+
+# Mark known binaries so git never touches them.
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.tar       binary
+*.tgz       binary
+*.gz        binary
+*.jar       binary
+*.onnx      binary
+*.pmml      binary
+*.xlsx      binary
+*.xls       binary
