@@ -120,19 +120,43 @@ describe('GET /audit-logs/export', () => {
 // These tests prove the row actually lands in audit_logs by querying it back
 // through GET /audit-logs.
 describe('Audit completeness — critical mutations', () => {
+  /**
+   * Poll /audit-logs until a row matching the predicate is found, or a
+   * deadline elapses. We poll (rather than do a single fixed-delay
+   * query) because the audit() helper is fire-and-forget on the
+   * controller side — the HTTP response can return BEFORE the audit row
+   * is committed, especially on slow Windows/WSL hosts.
+   *
+   * The predicate must filter by something specific to *this* test
+   * (e.g. detail.resourceId = the user/resource we just created). The
+   * audit_logs table is append-only at the DB level (immutability
+   * triggers), so previous runs' rows can persist in the volume and a
+   * naive `find(row => row.action === X)` would happily return one of
+   * them and assert against the wrong row.
+   */
+  async function pollAuditRow(
+    predicate: (row: { action: string; detail: Record<string, unknown> }) => boolean,
+    { timeoutMs = 5000, intervalMs = 100 }: { timeoutMs?: number; intervalMs?: number } = {},
+  ): Promise<{ action: string; detail: Record<string, unknown> } | null> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const res = await request(app)
+        .get('/audit-logs?limit=200')
+        .set('Authorization', `Bearer ${adminToken}`);
+      if (res.status === 200) {
+        const match = (res.body.data ?? []).find(predicate);
+        if (match) return match;
+      }
+      await new Promise((r) => setTimeout(r, intervalMs));
+    }
+    return null;
+  }
+
   async function findAuditAction(action: string): Promise<{ action: string; detail: Record<string, unknown> } | null> {
-    // Search recent rows; the API filter doesn't accept just `action` as a
-    // free-form string in the way that maps to our records cleanly across
-    // implementations, so we paginate the latest 50 and grep client-side.
-    const res = await request(app)
-      .get('/audit-logs?limit=100')
-      .set('Authorization', `Bearer ${adminToken}`);
-    if (res.status !== 200) return null;
-    return (
-      (res.body.data ?? []).find(
-        (row: { action: string }) => row.action === action,
-      ) ?? null
-    );
+    // Action-only variant kept for the existing resource/template/model
+    // tests below — they create unique-per-run resources, so any matching
+    // action row from THIS run is acceptable.
+    return pollAuditRow((row) => row.action === action);
   }
 
   it('resource.create lands in audit_logs after POST /resources', async () => {
@@ -181,8 +205,13 @@ describe('Audit completeness — critical mutations', () => {
   });
 
   it('user.update lands in audit_logs after PATCH /users/:id', async () => {
-    // Create a throw-away user to update
-    const userCreds = { username: `audit_usr_upd_${ts}`, password: 'AuditUserUpd123!x' };
+    // Create a throw-away user to update — use uuid() suffix instead of `ts`
+    // so this test stays deterministic even if a previous run on a stale
+    // volume already left an `audit_usr_upd_${ts}` row in the audit table.
+    const userCreds = {
+      username: `audit_usr_upd_${ts}_${uuid().slice(0, 8)}`,
+      password: 'AuditUserUpd123!x',
+    };
     const reg = await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send({
       ...userCreds,
       securityQuestions: [{ question: 'Q1?', answer: 'a1' }, { question: 'Q2?', answer: 'a2' }],
@@ -195,10 +224,13 @@ describe('Audit completeness — critical mutations', () => {
       .set('Idempotency-Key', uuid())
       .send({ status: 'suspended' });
 
-    // Allow a moment for fire-and-forget audit to flush
-    await new Promise((r) => setTimeout(r, 200));
-
-    const row = await findAuditAction('user.update');
+    // Poll for the row scoped to THIS user's id — this is robust against
+    // (a) the fire-and-forget audit() helper not having flushed yet, and
+    // (b) prior-run rows with the same `user.update` action sitting in
+    //     audit_logs (which is append-only at the DB level).
+    const row = await pollAuditRow(
+      (r) => r.action === 'user.update' && (r.detail as { resourceId?: string }).resourceId === uid,
+    );
     expect(row).not.toBeNull();
     expect((row!.detail as { newStatus: string }).newStatus).toBe('suspended');
 
@@ -212,7 +244,10 @@ describe('Audit completeness — critical mutations', () => {
   });
 
   it('user.delete lands in audit_logs after DELETE /users/:id', async () => {
-    const userCreds = { username: `audit_usr_del_${ts}`, password: 'AuditUserDel123!x' };
+    const userCreds = {
+      username: `audit_usr_del_${ts}_${uuid().slice(0, 8)}`,
+      password: 'AuditUserDel123!x',
+    };
     const reg = await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send({
       ...userCreds,
       securityQuestions: [{ question: 'Q1?', answer: 'a1' }, { question: 'Q2?', answer: 'a2' }],
@@ -224,9 +259,10 @@ describe('Audit completeness — critical mutations', () => {
       .set('Authorization', `Bearer ${adminToken}`)
       .set('Idempotency-Key', uuid());
 
-    await new Promise((r) => setTimeout(r, 200));
-
-    const row = await findAuditAction('user.delete');
+    // Same poll-by-resource-id pattern — see the user.update test above.
+    const row = await pollAuditRow(
+      (r) => r.action === 'user.delete' && (r.detail as { resourceId?: string }).resourceId === uid,
+    );
     expect(row).not.toBeNull();
     expect((row!.detail as { username: string }).username).toBe(userCreds.username);
   });

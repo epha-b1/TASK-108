@@ -22,22 +22,37 @@
 set -e
 
 HEALTH_URL="http://localhost:3000/health"
-MAX_WAIT=120
+MAX_WAIT=180
 
 cd "$(dirname "$0")"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Step 1 — Ensure the Docker stack is up
+#
+# We always wipe the `mysqldata` volume on a cold start (`down -v`) so
+# every bring-up runs against a fresh database. Otherwise stale state
+# from a previous build — users seeded under a different schema, leaked
+# credentials, half-rolled-back migrations, etc. — can flake one or two
+# API tests on the next run, even though the containers themselves come
+# up cleanly. The volume reset is the same trick w2t52 uses with
+# `reset_db` between suites.
+#
+# State machine:
+#   • not running       → down -v + build + start API and DB
+#   • running but sick  → down -v + build + start API and DB
+#   • running + healthy → reuse, skip startup
 # ──────────────────────────────────────────────────────────────────────────
 api_running=$(docker compose ps --status running 2>/dev/null | grep -c "api" || true)
 if [ "$api_running" -eq 0 ]; then
-  echo "[1/4] Docker stack is down — building and starting containers..."
+  echo "[1/4] Docker stack is down — wiping volumes and building from scratch..."
+  docker compose down -v >/dev/null 2>&1 || true
   docker compose up -d --build
   echo "      Containers started."
 else
   if ! docker compose exec -T api wget -qO- "$HEALTH_URL" >/dev/null 2>&1; then
-    echo "[1/4] API is unresponsive — tearing down and rebuilding..."
-    docker compose down && docker compose up -d --build
+    echo "[1/4] API is unresponsive — tearing down (with volumes) and rebuilding..."
+    docker compose down -v
+    docker compose up -d --build
     echo "      Containers rebuilt."
   else
     echo "[1/4] Docker stack already up and healthy — skipping startup."
