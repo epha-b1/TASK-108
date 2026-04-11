@@ -39,59 +39,25 @@ Health check: `curl http://localhost:3000/health`
 The compose path runs the API and a separate MySQL container so you can
 iterate without rebuilding the bundled single-container image.
 
-There is **no `.env` file** in this repo. The default `docker-compose.yml`
-is fully self-bootstrapping: every required value uses
-`${VAR:-TEST_ONLY_NOT_FOR_PRODUCTION_default}` interpolation, so a bare
-`docker compose up --build` from a fresh clone succeeds out of the box
-with zero host-env preamble. All defaults are clearly marked
-`TEST_ONLY_NOT_FOR_PRODUCTION` so they are unmistakable if copy-pasted
-into a real deployment.
-
-**Bare bring-up** (dev / CI smoke):
+There is **no `.env` file** in this repo and **no override file** to
+juggle. `docker-compose.yml` ships TEST_ONLY inline credentials (every
+secret literal is marked `TEST_ONLY_NOT_FOR_PRODUCTION`) so the entire
+stack boots from a fresh clone with zero host-env preamble:
 
 ```bash
 docker compose up -d --build
 ```
 
-**Production-shape bring-up** (override every secret via host env):
+The application server at `src/config/environment.ts` still validates
+length and rejects known weak placeholders (`changeme`, `secret`,
+`change_me_in_production`, etc.) regardless of `NODE_ENV`, so the
+inlined defaults can never be mistaken for production secrets — copy
+one into a real secret store and the server will refuse to start.
 
-```bash
-DATABASE_URL=mysql://tripforge:PASS@db:3306/tripforge \
-JWT_SECRET=$(openssl rand -hex 32) \
-ENCRYPTION_KEY=$(openssl rand -base64 24 | cut -c1-32) \
-MYSQL_USER=tripforge \
-MYSQL_PASSWORD=PASS \
-MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24) \
-NODE_ENV=production \
-docker compose up -d --build
-```
-
-The application server at `src/config/environment.ts` still rejects known
-weak placeholders (`changeme`, `secret`, `change_me_in_production`, etc.)
-regardless of `NODE_ENV`, so a naive copy-paste of the `${VAR:-default}`
-literal into a real secret store would not bypass the runtime check.
-
-### Test / CI override (`docker-compose.test.yml`)
-
-For the unit + API test suites we ship a separate override file. It
-opts the stack into `NODE_ENV=test`, layers in throwaway credentials
-clearly marked `TEST_ONLY_NOT_FOR_PRODUCTION`, and lets reviewers run
-the suites in one command — no host env exports, no `.env` file:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.test.yml \
-  exec -T api npm run test:unit -- --runInBand
-docker compose -f docker-compose.yml -f docker-compose.test.yml \
-  exec -T api npx jest --testPathPattern=API_tests --runInBand
-```
-
-The compose file maps host port **3010** → container port 3000 so it
-coexists with any other local service that already binds 3000. The
-override exists so the *default* compose path stays production-shaped
-and rejects ad-hoc startup, while reviewers still have a one-command
-test rig. For the truly single-container production path see the
-*Quick Start* section above.
+For a production deploy you must edit `docker-compose.yml` (or layer in
+your own override file) to replace every `TEST_ONLY_NOT_FOR_PRODUCTION_*`
+literal with a strong random value, set `NODE_ENV=production`, and use
+Docker secrets / k8s Secret instead of environment literals.
 
 ---
 
@@ -126,60 +92,52 @@ docker run --rm -d -p 3000:3000 \
 curl -s http://localhost:3000/health
 ```
 
-### Test suites (compose-based, no `.env`)
+### Test suites (single command, no `.env`)
 
-The official test commands always pass **both** compose files. The default
-`docker-compose.yml` is production-shaped and refuses to start without
-host-environment secrets; the `docker-compose.test.yml` override layers in
-the throwaway `TEST_ONLY_NOT_FOR_PRODUCTION` credentials and switches
-`NODE_ENV=test`. There is no `.env` file involved.
-
-The recommended invocation is the bundled `run_tests.sh` script, which
-wraps the canonical two-file compose command, brings the stack up,
-waits for the API to be healthy, runs both test suites, and prints a
-summary. It exits non-zero immediately if compose startup fails so you
-never end up running tests against a half-started stack.
+The official test command is `./run_tests.sh`. It is the only thing a
+reviewer needs to run from a fresh clone — it brings the stack up,
+waits for the API to be healthy, runs the unit and API suites inside
+the container, and prints a summary. There is no `.env` file, no
+override file, no host-environment preamble, no flags.
 
 ```bash
 ./run_tests.sh
 ```
 
-If you need to run the steps manually (e.g. to iterate on a single
-test file inside the container) you must first export the same
-TEST_ONLY shell variables that `run_tests.sh` exports — Docker Compose
-evaluates `${VAR:?...}` in the base file at parse time, *before* the
-override file's container `environment:` block is merged, so the
-override alone is not enough.
+Equivalent manual commands (for iterating on a single file inside the
+running container):
 
 ```bash
-# TEST_ONLY shell exports — kept in sync with docker-compose.test.yml.
-# Never use these values in a real environment.
-export DATABASE_URL="mysql://tripforge:TEST_ONLY_NOT_FOR_PRODUCTION_db@db:3306/tripforge"
-export JWT_SECRET="TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx"
-export ENCRYPTION_KEY="TEST_ONLY_NOT_FOR_PRODUCTION__32"
-export MYSQL_USER="tripforge"
-export MYSQL_PASSWORD="TEST_ONLY_NOT_FOR_PRODUCTION_db"
-export MYSQL_DATABASE="tripforge"
-export MYSQL_ROOT_PASSWORD="TEST_ONLY_NOT_FOR_PRODUCTION_root"
-export NODE_ENV="test"
+docker compose up -d --build
+docker compose exec -T api npx jest --testPathPattern=unit_tests --runInBand
+docker compose exec -T api npx jest --testPathPattern=API_tests --runInBand
+docker compose down
+```
 
-# Bring the test stack up
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+### Windows / WSL: line endings
 
-# Wait for the API to be healthy
-docker compose -f docker-compose.yml -f docker-compose.test.yml \
-  exec -T api wget -qO- http://localhost:3000/health
+If you cloned on Windows with `core.autocrlf=true` (the default) and
+`./run_tests.sh` fails with:
 
-# Unit tests
-docker compose -f docker-compose.yml -f docker-compose.test.yml \
-  exec -T api npm run test:unit -- --runInBand
+```text
+zsh: ./run_tests.sh: bad interpreter: /bin/bash^M: no such file or directory
+```
 
-# API integration tests
-docker compose -f docker-compose.yml -f docker-compose.test.yml \
-  exec -T api npx jest --testPathPattern=API_tests --runInBand --no-cache
+…the script has CRLF line endings on disk. The repo ships a
+`.gitattributes` file that pins `*.sh`, `*.py`, `Dockerfile`,
+`docker/*`, `scripts/*`, and the rest of the source tree to `eol=lf`,
+so a **fresh** clone is correct. To re-normalise an **existing** clone
+without losing local work, run any one of:
 
-# Tear down when done
-docker compose -f docker-compose.yml -f docker-compose.test.yml down -v
+```bash
+# Recommended: re-apply .gitattributes to just the offending file.
+# (Does not touch any other tracked or untracked files.)
+git add --renormalize run_tests.sh
+git checkout -- run_tests.sh
+
+# Or: strip CRs in place with sed (works even if git is misbehaving).
+sed -i 's/\r$//' run_tests.sh
+chmod +x run_tests.sh
 ```
 
 ## Ports

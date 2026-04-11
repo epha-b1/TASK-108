@@ -1,50 +1,41 @@
+# ============================================================================
+# DEVELOPMENT / ACCEPTANCE — NOT FOR PRODUCTION
+# This file ships TEST_ONLY inline credentials so the entire stack boots
+# from a fresh clone with a single `docker compose up --build` (or
+# `./run_tests.sh`) — there is intentionally NO `.env` file, NO
+# `${VAR:?…}` interpolation, and NO host-environment preamble required.
+#
+# All values are clearly marked TEST_ONLY_NOT_FOR_PRODUCTION so a
+# copy-paste into a real deployment is unmistakable. The application
+# server at `src/config/environment.ts` still validates length and
+# rejects known-weak placeholders (`changeme`, `secret`, etc.) at
+# startup, so a naive copy-paste of one of these literals into a real
+# secret store would not bypass the runtime check.
+#
+# For production:
+#   1. Replace JWT_SECRET with a fresh `openssl rand -hex 32` value.
+#   2. Replace ENCRYPTION_KEY with a fresh `openssl rand -base64 24 | cut -c1-32`.
+#   3. Replace MYSQL_*_PASSWORD with strong random values.
+#   4. Set NODE_ENV=production.
+#   5. Use Docker secrets / k8s Secret instead of environment literals.
+# ============================================================================
 services:
   api:
     build: .
     ports:
-      # Host-side 3010 → container 3000. The host-side number is bumped off
-      # the default 3000 so the dev/acceptance compose rig coexists with any
-      # other service that already binds 3000 on the host. Inside the
-      # container the API still listens on 3000, which is what the test
-      # suite (running via `docker compose exec`) and the healthcheck use.
+      # Host-side 3010 → container 3000 so the dev/acceptance compose rig
+      # coexists with any other service that already binds 3000 on the
+      # host. Inside the container the API still listens on 3000, which
+      # is what `docker compose exec` and the healthcheck use.
       - "3010:3000"
     environment:
-      # There is intentionally NO `.env` file in this repo. Every value
-      # below uses `${VAR:-TEST_ONLY_DEFAULT}` interpolation so a bare
-      # `docker compose up` from a fresh clone succeeds out of the box
-      # — the CI validator must not need any host-env preamble. All of
-      # the defaults are clearly marked `TEST_ONLY_NOT_FOR_PRODUCTION` so
-      # a copy-paste into a real deployment is unmistakable.
-      #
-      # Production deploys MUST override every secret via the host env,
-      # for example:
-      #
-      #   DATABASE_URL=mysql://USER:PASS@db:3306/tripforge \
-      #   JWT_SECRET=$(openssl rand -hex 32) \
-      #   ENCRYPTION_KEY=$(openssl rand -base64 24 | cut -c1-32) \
-      #   MYSQL_USER=tripforge \
-      #   MYSQL_PASSWORD=$(openssl rand -hex 24) \
-      #   MYSQL_ROOT_PASSWORD=$(openssl rand -hex 24) \
-      #   NODE_ENV=production \
-      #   docker compose up -d
-      #
-      # The application server still enforces its own strict validation
-      # at startup (see `src/config/environment.ts`): any secret in the
-      # hardcoded weak-secret deny list (`changeme`, `secret`, etc.) is
-      # rejected regardless of NODE_ENV, the JWT secret must be ≥32 chars,
-      # and the encryption key must be exactly 32 chars. The defaults
-      # below satisfy those constraints while remaining obviously
-      # non-production.
-      DATABASE_URL: ${DATABASE_URL:-mysql://tripforge:TEST_ONLY_NOT_FOR_PRODUCTION_db@db:3306/tripforge}
-      JWT_SECRET: ${JWT_SECRET:-TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-TEST_ONLY_NOT_FOR_PRODUCTION__32}
-      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-1800}
-      REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-1209600}
+      NODE_ENV: "test"
+      DATABASE_URL: "mysql://tripforge:TEST_ONLY_NOT_FOR_PRODUCTION_db@db:3306/tripforge"
+      JWT_SECRET: "TEST_ONLY_NOT_FOR_PRODUCTION_jwt_secret_padding_to_64_chars_xx"
+      ENCRYPTION_KEY: "TEST_ONLY_NOT_FOR_PRODUCTION__32"
+      ACCESS_TOKEN_TTL: "1800"
+      REFRESH_TOKEN_TTL: "1209600"
       PORT: "3000"
-      # Default NODE_ENV is `production` so the bare compose path runs a
-      # production-shape deploy. To run the test suite use the
-      # `docker-compose.test.yml` override (see run_tests.sh).
-      NODE_ENV: ${NODE_ENV:-production}
     depends_on:
       db:
         condition: service_healthy
@@ -61,31 +52,23 @@ services:
     command: sh -c "npx prisma migrate deploy && node dist/server.js"
 
   db:
-    # Pin MySQL 8.0 — the 8.4 LTS line removed
-    # `--default-authentication-plugin`, breaking the Prisma client compat
-    # workaround we rely on for `mysql_native_password`.
+    # Pin MySQL 8.0 — the 8.4 LTS line removed `--default-authentication-plugin`,
+    # breaking the Prisma client compatibility workaround for `mysql_native_password`.
     image: mysql:8.0
     # - mysql_native_password: Prisma's bundled mysql client doesn't yet
     #   speak `caching_sha2_password`, so we keep the legacy plugin.
     # - log_bin_trust_function_creators=ON: lets the Prisma migrate user
-    #   create triggers/functions without requiring SUPER privileges (which
-    #   the application user is intentionally not granted). This matches the
-    #   single-container deployment that runs migrations as a privileged
-    #   bootstrap step.
+    #   create triggers/functions without requiring SUPER privileges.
     command:
       - "--default-authentication-plugin=mysql_native_password"
       - "--log-bin-trust-function-creators=ON"
     ports:
       - "3306:3306"
     environment:
-      # Same self-bootstrapping posture as the API service: every value
-      # has a TEST_ONLY default so `docker compose up` from a fresh clone
-      # succeeds with no host-env preamble. Production deploys override
-      # via the host environment.
-      MYSQL_USER: ${MYSQL_USER:-tripforge}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-TEST_ONLY_NOT_FOR_PRODUCTION_db}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-tripforge}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-TEST_ONLY_NOT_FOR_PRODUCTION_root}
+      MYSQL_USER: "tripforge"
+      MYSQL_PASSWORD: "TEST_ONLY_NOT_FOR_PRODUCTION_db"
+      MYSQL_DATABASE: "tripforge"
+      MYSQL_ROOT_PASSWORD: "TEST_ONLY_NOT_FOR_PRODUCTION_root"
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 5s
