@@ -8,7 +8,15 @@ export class PrismaClient {
   device = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), count: jest.fn(), update: jest.fn(), delete: jest.fn(), deleteMany: jest.fn() };
   refreshToken = { create: jest.fn(), findFirst: jest.fn(), update: jest.fn(), updateMany: jest.fn(), deleteMany: jest.fn() };
   passwordHistory = { create: jest.fn(), findMany: jest.fn(), deleteMany: jest.fn() };
-  idempotencyKey = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), upsert: jest.fn(), delete: jest.fn(), deleteMany: jest.fn() };
+  idempotencyKey = {
+    create: jest.fn().mockResolvedValue({}),
+    findUnique: jest.fn().mockResolvedValue(null),
+    findMany: jest.fn().mockResolvedValue([]),
+    upsert: jest.fn().mockResolvedValue({}),
+    update: jest.fn().mockResolvedValue({}),
+    delete: jest.fn().mockResolvedValue({}),
+    deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+  };
   loginAttempt = { create: jest.fn(), count: jest.fn(), deleteMany: jest.fn() };
   role = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), upsert: jest.fn() };
   permissionPoint = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), upsert: jest.fn() };
@@ -22,13 +30,13 @@ export class PrismaClient {
   travelTimeMatrix = { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), upsert: jest.fn(), deleteMany: jest.fn() };
   itinerary = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), deleteMany: jest.fn(), count: jest.fn() };
   itineraryVersion = { create: jest.fn(), findMany: jest.fn(), findFirst: jest.fn(), count: jest.fn() };
-  itineraryItem = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), deleteMany: jest.fn() };
+  itineraryItem = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn(), delete: jest.fn(), deleteMany: jest.fn() };
   importBatch = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() };
   importError = { create: jest.fn(), createMany: jest.fn(), findMany: jest.fn(), deleteMany: jest.fn() };
   mlModel = { create: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), update: jest.fn() };
-  abAllocation = { create: jest.fn(), findMany: jest.fn(), upsert: jest.fn(), deleteMany: jest.fn() };
+  abAllocation = { create: jest.fn(), findFirst: jest.fn(), findMany: jest.fn(), upsert: jest.fn(), update: jest.fn(), deleteMany: jest.fn() };
   notificationTemplate = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() };
   notification = { create: jest.fn(), findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn(), count: jest.fn() };
   outboxMessage = { create: jest.fn(), findMany: jest.fn(), update: jest.fn(), count: jest.fn() };
-  userNotificationSetting = { findUnique: jest.fn(), upsert: jest.fn(), update: jest.fn() };
+  userNotificationSetting = { findUnique: jest.fn(), upsert: jest.fn(), update: jest.fn(), updateMany: jest.fn(), create: jest.fn() };
 }
