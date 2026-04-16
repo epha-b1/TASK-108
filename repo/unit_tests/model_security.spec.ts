@@ -196,17 +196,115 @@ describe('MODEL_RUNTIME_UNAVAILABLE constant', () => {
   });
 });
 
-describe('OnnxAdapter source — exit-code-3 translation', () => {
-  it('contains the explicit translation block (static check)', () => {
-    // Static check guards against an accidental refactor that drops the
-    // exit-code-3 → 503 MODEL_RUNTIME_UNAVAILABLE mapping. Cheap, no-Docker,
-    // catches the regression in CI.
-    const src = fs.readFileSync(
-      path.resolve(__dirname, '..', 'src', 'services', 'model.service.ts'),
-      'utf-8',
-    );
-    expect(src).toMatch(/AdapterProcessError\s*&&\s*err\.exitCode\s*===\s*3/);
-    expect(src).toMatch(/MODEL_RUNTIME_UNAVAILABLE/);
-    expect(src).toMatch(/onnxruntime.*is not installed|`onnxruntime`/);
+describe('OnnxAdapter — exit-code-3 → 503 MODEL_RUNTIME_UNAVAILABLE translation (behavior)', () => {
+  // The previous revision of this test read `model.service.ts` as a string
+  // and grepped it for the translation block. That was brittle: it caught
+  // syntactic regressions but not semantic ones (e.g. the catch block
+  // being reachable for every exit code, not just 3). The replacement
+  // below drives the REAL adapter with a stubbed `child_process.spawn`
+  // so we observe the actual branching behaviour end-to-end — any future
+  // refactor that breaks the mapping (deletes the branch, narrows the
+  // guard, swaps the status code, etc.) turns into a concrete test
+  // failure instead of a string-match miss.
+
+  let spawnMock: jest.Mock;
+  let nextSpawn: { exitCode: number; stderr?: string; stdout?: string };
+  let modelService: typeof import('../src/services/model.service');
+
+  beforeAll(() => {
+    jest.isolateModules(() => {
+      // Replace child_process.spawn with a controllable stub. We emit
+      // `close` asynchronously on the next tick so the Promise chain in
+      // spawnAdapter observes the same sequencing as a real subprocess.
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        const spawn = jest.fn(() => {
+          const proc: any = new EventEmitter();
+          proc.stdin = { write: jest.fn(), end: jest.fn() };
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          setImmediate(() => {
+            if (nextSpawn.stdout) proc.stdout.emit('data', Buffer.from(nextSpawn.stdout));
+            if (nextSpawn.stderr) proc.stderr.emit('data', Buffer.from(nextSpawn.stderr));
+            proc.emit('close', nextSpawn.exitCode);
+          });
+          return proc;
+        });
+        spawnMock = spawn;
+        return { spawn };
+      });
+      process.env.MODEL_ADAPTER_MODE = 'process';
+      modelService = require('../src/services/model.service');
+    });
+  });
+
+  afterAll(() => {
+    delete process.env.MODEL_ADAPTER_MODE;
+  });
+
+  // Stage a stub .onnx file so validateModelFilePath passes before spawn.
+  let stubOnnx: string;
+  beforeAll(() => {
+    stubOnnx = path.join(MODELS_DIR, `behavior_${Date.now()}.onnx`);
+    fs.writeFileSync(stubOnnx, 'stub');
+  });
+  afterAll(() => {
+    if (stubOnnx && fs.existsSync(stubOnnx)) fs.unlinkSync(stubOnnx);
+  });
+
+  it('exit code 3 → throws AppError(503, MODEL_RUNTIME_UNAVAILABLE, …) with an onnxruntime remediation message', async () => {
+    nextSpawn = { exitCode: 3, stderr: 'onnxruntime is not installed' };
+    const adapter = modelService.getAdapter('onnx');
+
+    let caught: any = null;
+    try {
+      await adapter.infer({ x: 1 }, { filePath: path.basename(stubOnnx) } as any);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught.statusCode).toBe(503);
+    expect(caught.code).toBe('MODEL_RUNTIME_UNAVAILABLE');
+    expect(caught.message).toMatch(/onnxruntime/i);
+    expect(caught.message).toMatch(/pip install|derived image|MODEL_ADAPTER_MODE=mock/i);
+  });
+
+  it('exit code 2 (or any non-3, non-zero) → rethrows as AdapterProcessError (NOT translated to 503)', async () => {
+    nextSpawn = { exitCode: 2, stderr: 'something else went wrong' };
+    const adapter = modelService.getAdapter('onnx');
+    let caught: any = null;
+    try {
+      await adapter.infer({ x: 1 }, { filePath: path.basename(stubOnnx) } as any);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).not.toBeNull();
+    expect(caught).toBeInstanceOf(modelService.AdapterProcessError);
+    expect(caught.exitCode).toBe(2);
+    // Must NOT carry the 503 envelope fields — the guard is exit-code-specific.
+    expect(caught.statusCode).toBeUndefined();
+    expect(caught.code).toBeUndefined();
+  });
+
+  it('exit code 0 + valid JSON stdout → returns the parsed adapter result', async () => {
+    nextSpawn = {
+      exitCode: 0,
+      stdout: JSON.stringify({ prediction: 0.42, confidence: 0.88, topFeatures: [] }),
+    };
+    const adapter = modelService.getAdapter('onnx');
+    const result = await adapter.infer({ x: 1 }, { filePath: path.basename(stubOnnx) } as any);
+    expect(result.prediction).toBe(0.42);
+    expect(result.confidence).toBe(0.88);
+    // Spawn MUST have targeted /usr/bin/python3 with the onnx_runner.py
+    // script and the resolved absolute model path — proves no shell
+    // interpolation, matching the production execve invocation.
+    expect(spawnMock).toHaveBeenCalled();
+    const call = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    expect(call[0]).toBe('/usr/bin/python3');
+    expect(call[1][0]).toMatch(/onnx_runner\.py$/);
+    expect(call[1][1]).toBe(fs.realpathSync(stubOnnx));
+    // shell: false (the structural fix for the old -c injection vulnerability).
+    const opts = call[2] ?? {};
+    expect(opts.shell).toBe(false);
   });
 });
