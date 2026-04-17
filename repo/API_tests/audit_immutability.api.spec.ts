@@ -160,16 +160,25 @@ describe('audit_logs — DB trigger immutability', () => {
   });
 
   it('INSERT on audit_logs is UNAFFECTED by the triggers (append-only means appends still work)', async () => {
-    const n0 = await prisma.auditLog.count();
-    await prisma.auditLog.create({
+    const probeTrace = `imm_${ts}_${Math.random().toString(36).slice(2, 10)}`;
+    const created = await prisma.auditLog.create({
       data: {
         action: 'explicit_insert_probe',
         detail: { actorId: adminUserId, resourceType: 'probe', resourceId: 'p', ok: true },
-        traceId: `imm_${ts}`,
+        traceId: probeTrace,
       },
     });
-    const n1 = await prisma.auditLog.count();
-    expect(n1).toBe(n0 + 1);
+    // Per-row verification is authoritative. A whole-table count(before)
+    // vs count(after) is unreliable: audit() fire-and-forget writes from
+    // the middleware of parallel tests land between those two queries
+    // and pollute the delta (the DELETE/updateMany tests nearby showed
+    // the same flake pattern). The guarantee this test asserts is:
+    // INSERT succeeded and the row is readable back — not that no other
+    // row landed in between.
+    const found = await prisma.auditLog.findUnique({ where: { id: created.id } });
+    expect(found).not.toBeNull();
+    expect(found?.action).toBe('explicit_insert_probe');
+    expect(found?.traceId).toBe(probeTrace);
   });
 
   it('deleteMany against audit_logs is rejected (Prisma path, not just raw)', async () => {

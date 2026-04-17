@@ -73,7 +73,11 @@ services:
       - "--default-authentication-plugin=mysql_native_password"
       - "--log-bin-trust-function-creators=ON"
     ports:
-      - "3306:3306"
+      # Host-side 33306 → container 3306 so the compose stack coexists
+      # with any local MySQL/MariaDB that already binds 3306 on the host.
+      # The API inside the compose network still talks to `db:3306` over
+      # the internal bridge, unaffected by the host-side rebinding.
+      - "33306:3306"
     environment:
       MYSQL_USER: "tripforge"
       MYSQL_PASSWORD: "TEST_ONLY_NOT_FOR_PRODUCTION_db"
