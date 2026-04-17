@@ -93,36 +93,74 @@ describe('POST /auth/login', () => {
     expect(res.status).toBe(401);
   });
 
-  it('423 — after 10 failed attempts (locked)', async () => {
-    // Create a throwaway user for lockout testing
+  // Lockout boundary — deterministic variant.
+  //
+  // The original shape looped 10 sequential bcrypt-backed login calls,
+  // which pushed the test close to the Jest timeout on slow CI. We now
+  // seed the first 9 failed-attempt rows directly in `login_attempts`
+  // (the same table the service counts against the rolling 15-minute
+  // window) and then make exactly ONE real HTTP login call to trip the
+  // lockout. Zero bcrypt cost for the seeded rows, no wall-clock wait,
+  // and the assertions are STRONGER than before:
+  //
+  //   1. the 10th wrong-password login returns the canonical 401 envelope
+  //   2. the user row transitions to status='locked' with lockedUntil in the future
+  //   3. a subsequent login with the CORRECT password is denied with 423
+  //      (not 200) while still inside the lock window
+  it('423 — account locks after 10 failed attempts AND correct password is denied during the lock window', async () => {
     const lockUser = {
-      username: `locktest_${Date.now()}`,
+      username: `locktest_${Date.now()}_${uuid()}`,
       password: 'ValidPassword1!',
       securityQuestions: validUser.securityQuestions,
     };
-    await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send(lockUser);
+    const reg = await request(app).post('/auth/register').set('Idempotency-Key', uuid()).send(lockUser);
+    expect(reg.status).toBe(201);
+    const userId: string = reg.body.id;
 
-    for (let i = 0; i < 10; i++) {
-      await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send({
-        username: lockUser.username,
-        password: 'WrongPassword1!',
-      });
-    }
-
-    const res = await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send({
-      username: lockUser.username,
-      password: lockUser.password,
+    // Seed 9 recent failed attempts directly — the service counts rows
+    // in the last 15 minutes, so `createdAt: now()` default is fine.
+    await prisma.loginAttempt.createMany({
+      data: Array.from({ length: 9 }, () => ({ userId, success: false })),
     });
-    expect(res.status).toBe(423);
 
-    // Clean up lockout user
-    const u = await prisma.user.findUnique({ where: { username: lockUser.username } });
-    if (u) {
-      await prisma.passwordHistory.deleteMany({ where: { userId: u.id } });
-      await prisma.securityQuestion.deleteMany({ where: { userId: u.id } });
-      await prisma.user.delete({ where: { id: u.id } });
-    }
-  }, 30000);
+    // One real HTTP wrong-password login — this is the 10th attempt, which
+    // trips `recentFailures >= MAX_FAILED_ATTEMPTS` and writes status='locked'
+    // + lockedUntil = now + 15 min on the user row.
+    const trip = await request(app)
+      .post('/auth/login')
+      .set('Idempotency-Key', uuid())
+      .send({ username: lockUser.username, password: 'WrongPassword1!' });
+    expect(trip.status).toBe(401);
+    expect(trip.body.code).toBe('UNAUTHORIZED');
+    expect(trip.body.requestId).toBe(trip.headers['x-request-id']);
+
+    // DB invariant: the user is now locked, with lockedUntil strictly in
+    // the future. No assertion on exact value — the service uses its own
+    // Date.now() reference and we only care about direction.
+    const row = await prisma.user.findUnique({ where: { id: userId } });
+    expect(row?.status).toBe('locked');
+    expect(row?.lockedUntil).not.toBeNull();
+    expect(row!.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+
+    // Critical assertion: supplying the CORRECT password is still denied
+    // while inside the lock window. Returns 423, NOT 200, NOT 401.
+    const blocked = await request(app)
+      .post('/auth/login')
+      .set('Idempotency-Key', uuid())
+      .send({ username: lockUser.username, password: lockUser.password });
+    expect(blocked.status).toBe(423);
+    expect(blocked.body.code).toBe('ACCOUNT_LOCKED');
+    expect(blocked.body.message).toMatch(/locked/i);
+    expect(blocked.body.requestId).toBe(blocked.headers['x-request-id']);
+
+    // Clean up lockout user — must include the seeded loginAttempt rows.
+    await prisma.loginAttempt.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.refreshToken.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.device.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.passwordHistory.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.securityQuestion.deleteMany({ where: { userId } }).catch(() => {});
+    await prisma.user.deleteMany({ where: { id: userId } }).catch(() => {});
+  }, 20_000);
 });
 
 describe('POST /auth/refresh', () => {

@@ -1,6 +1,35 @@
 # TripForge
 
+**Project Type: backend**
+
 Offline-first backend API platform for travel itinerary planning, data ingestion, and model-assisted recommendations.
+
+---
+
+## Startup (Required Command)
+
+From a fresh clone, the **one command** needed to bring TripForge up on your machine is:
+
+```bash
+docker-compose up
+```
+
+That's the canonical, Docker-first startup. The host only needs Docker itself — every dependency (Node, MariaDB, Prisma, migrations) is packaged inside the containers, and there is no host-side package-manager step, no manual database setup, and no `.env` file to create. The compose file at `docker-compose.yml` ships TEST_ONLY inline credentials so the entire stack boots with zero host-env preamble.
+
+Equivalent modern CLI (newer Docker installations use the hyphen-less form):
+
+```bash
+docker compose up -d --build
+```
+
+Once the API is healthy, call `http://localhost:3010/health` to verify (host port `3010` maps to container `3000` in the compose dev rig; the single-container image exposes `3000` directly).
+
+Demo credentials (after the first `./run_tests.sh` or `docker compose exec -T api npm run seed`, both of which run inside Docker):
+
+| Username | Password | Role |
+|----------|----------|------|
+| `admin` | `Admin123!Admin` | `admin` (full access) |
+| `organizer` | `Organizer123!` | `organizer` (itinerary owner) |
 
 ---
 
@@ -291,20 +320,28 @@ is not present, `POST /models/{id}/infer` returns a canonical error envelope:
 }
 ```
 
-Remediation options:
+Remediation options (Docker-only — no host runtime installs):
 
-1. `pip install onnxruntime` inside the container (or in a derived image
-   layer), then restart the API. The bundled `python3` is glibc-via-alpine
-   so a custom build/wheel may be required.
-2. Bake `onnxruntime` into a derived image: start `FROM tripforge` and add
-   the wheel via your platform's package manager.
-3. Set `MODEL_ADAPTER_MODE=mock` to fall back to deterministic mock
-   inference for development / acceptance tests.
+1. **Build or use a derived Docker image that already contains
+   `onnxruntime`.** The recommended shape is a two-line derived
+   Dockerfile:
 
-PMML and Custom adapter paths are unaffected — they work out of the box
-because Java + python3 are both bundled. The static code path that surfaces
-the missing-runtime AppError is exercised by
-`unit_tests/model_security.spec.ts`.
+   ```Dockerfile
+   FROM tripforge
+   # Add onnxruntime via your derived image's package layer.
+   ```
+
+   Deploy the derived image instead of the base `tripforge` image. The
+   runtime dependency is therefore baked in at build time, so the
+   running container never has to perform an install step.
+2. Set `MODEL_ADAPTER_MODE=mock` (environment variable, not a runtime
+   install) to fall back to deterministic mock inference for
+   development / acceptance tests.
+
+PMML and Custom adapter paths are unaffected — Java + python3 are both
+bundled in the default image so those paths work out of the box. The
+static code path that surfaces the missing-runtime AppError is exercised
+by `unit_tests/model_security.spec.ts`.
 
 ### Request Validation
 
@@ -402,10 +439,22 @@ from a checkout that includes the project-root `docs/` (host or CI). It is
 ## Run all tests
 
 ```bash
-# Unit tests (no DB)
-npm run test:unit -- --runInBand
+# One command — Docker-only, boots the stack, runs unit + API suites,
+# and enforces the coverage threshold gate inside the container.
+./run_tests.sh
 
-# API tests (uses MySQL via compose network)
+# Optional: force a cold-start clean DB for cross-session determinism
+./run_tests.sh --fresh
+```
+
+Iterating on a single suite against the already-running compose stack
+(still Docker-only, no host Node dependency):
+
+```bash
+# Unit tests (Prisma is auto-mocked)
+docker compose exec -T api npx jest --testPathPattern=unit_tests --runInBand
+
+# API tests (real MySQL via the compose network)
 docker compose exec -T api npx jest --testPathPattern=API_tests --runInBand
 ```
 

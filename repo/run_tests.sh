@@ -51,6 +51,42 @@ MAX_WAIT=180
 cd "$(dirname "$0")"
 
 # ──────────────────────────────────────────────────────────────────────────
+# Step 0 — Docker image pull with bounded retries
+#
+# Compose's `up --build` implicitly pulls missing base images the first
+# time. When the Docker Hub registry is flaky (rate limits, DNS blips,
+# transient 5xx), a single pull failure aborts the whole run. We
+# pre-pull explicitly with 3 attempts + 5s/10s/20s backoff so transient
+# network trouble doesn't cause a confusing compose-up failure. If all
+# three attempts fail we emit a clear actionable error — the operator
+# is expected to fix connectivity before retrying.
+# ──────────────────────────────────────────────────────────────────────────
+echo "[0/6] Pulling base images (with retry on transient failures)..."
+PULL_OK=0
+for attempt in 1 2 3; do
+  if docker compose pull --quiet 2>&1 | tail -20; then
+    PULL_OK=1
+    echo "      Pull OK on attempt $attempt."
+    break
+  fi
+  case "$attempt" in
+    1) SLEEP=5 ;;
+    2) SLEEP=10 ;;
+    3) SLEEP=20 ;;
+  esac
+  if [ "$attempt" -lt 3 ]; then
+    echo "      Pull attempt $attempt failed — retrying in ${SLEEP}s..."
+    sleep "$SLEEP"
+  fi
+done
+if [ "$PULL_OK" -eq 0 ]; then
+  echo "ERROR: docker compose pull failed after 3 attempts." >&2
+  echo "       Check registry reachability (docker login / DNS / rate limits)," >&2
+  echo "       then re-run \`./run_tests.sh\` (add --fresh if you want a clean DB)." >&2
+  exit 69   # EX_UNAVAILABLE — service is unavailable
+fi
+
+# ──────────────────────────────────────────────────────────────────────────
 # Step 1 — Ensure the Docker stack is up
 #
 # We always wipe the `mysqldata` volume on a cold start (`down -v`) so
@@ -68,30 +104,30 @@ cd "$(dirname "$0")"
 # ──────────────────────────────────────────────────────────────────────────
 api_running=$(docker compose ps --status running 2>/dev/null | grep -c "api" || true)
 if [ "$FRESH" -eq 1 ]; then
-  echo "[1/5] --fresh requested — forcing wiped DB + rebuild for a deterministic starting state..."
+  echo "[1/6] --fresh requested — forcing wiped DB + rebuild for a deterministic starting state..."
   docker compose down -v >/dev/null 2>&1 || true
   docker compose up -d --build
   echo "      Containers started from a clean slate."
 elif [ "$api_running" -eq 0 ]; then
-  echo "[1/5] Docker stack is down — wiping volumes and building from scratch..."
+  echo "[1/6] Docker stack is down — wiping volumes and building from scratch..."
   docker compose down -v >/dev/null 2>&1 || true
   docker compose up -d --build
   echo "      Containers started."
 else
   if ! docker compose exec -T api wget -qO- "$HEALTH_URL" >/dev/null 2>&1; then
-    echo "[1/5] API is unresponsive — tearing down (with volumes) and rebuilding..."
+    echo "[1/6] API is unresponsive — tearing down (with volumes) and rebuilding..."
     docker compose down -v
     docker compose up -d --build
     echo "      Containers rebuilt."
   else
-    echo "[1/5] Docker stack already up and healthy — skipping startup (use --fresh to force a clean DB)."
+    echo "[1/6] Docker stack already up and healthy — skipping startup (use --fresh to force a clean DB)."
   fi
 fi
 
 # ──────────────────────────────────────────────────────────────────────────
 # Step 2 — Wait for API health
 # ──────────────────────────────────────────────────────────────────────────
-echo "[2/5] Waiting for API..."
+echo "[2/6] Waiting for API..."
 elapsed=0
 while [ $elapsed -lt $MAX_WAIT ]; do
   if docker compose exec -T api wget -qO- "$HEALTH_URL" 2>/dev/null | grep -q '"status"'; then
@@ -110,19 +146,19 @@ fi
 # ──────────────────────────────────────────────────────────────────────────
 # Step 3 — Unit tests (inside container)
 # ──────────────────────────────────────────────────────────────────────────
-echo "[3/5] Unit tests..."
+echo "[3/6] Unit tests..."
 UNIT_EXIT=0
 # --runInBand: single-threaded execution. Unit tests auto-mock Prisma and
 # share the winston logger singleton across files; serialising eliminates
 # the class of cross-worker flake the 2026-04 audit flagged.
-docker compose exec -T api npx jest --testPathPattern=unit_tests --verbose --no-cache --runInBand 2>&1 || UNIT_EXIT=$?
+docker compose exec -T api npx jest --testPathPatterns=unit_tests --verbose --no-cache --runInBand 2>&1 || UNIT_EXIT=$?
 
 # ──────────────────────────────────────────────────────────────────────────
 # Step 4 — API tests (inside container)
 # ──────────────────────────────────────────────────────────────────────────
-echo "[4/5] API tests..."
+echo "[4/6] API tests..."
 API_EXIT=0
-docker compose exec -T api npx jest --testPathPattern=API_tests --verbose --no-cache --runInBand 2>&1 || API_EXIT=$?
+docker compose exec -T api npx jest --testPathPatterns=API_tests --verbose --no-cache --runInBand 2>&1 || API_EXIT=$?
 
 # ──────────────────────────────────────────────────────────────────────────
 # Step 5 — Combined coverage + threshold gate (inside container)
@@ -137,7 +173,7 @@ docker compose exec -T api npx jest --testPathPattern=API_tests --verbose --no-c
 # The coverage summary is printed to stdout; the full HTML report is
 # materialised under repo/coverage/ for local inspection.
 # ──────────────────────────────────────────────────────────────────────────
-echo "[5/5] Coverage threshold gate..."
+echo "[5/6] Coverage threshold gate..."
 COV_EXIT=0
 docker compose exec -T api npx jest \
     --coverage \

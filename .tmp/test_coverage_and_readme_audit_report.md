@@ -1,307 +1,321 @@
 # Test Coverage Audit
 
-## Scope, Method, and Project Type
-- Audit mode: static inspection only (no commands/tests/builds executed).
-- Project type declaration at README top is **missing** (`repo/README.md:1-4`).
-- Inferred project type: **backend** (Express API-only structure in `repo/src/app.ts:20-56`, no frontend source files found; only `repo/templates/.gitkeep`).
+## Project Type Detection
+- Declared in `repo/README.md:3` as `backend`.
+- Light repo inspection is consistent with backend-only: no frontend source tree or frontend test files detected (`repo/src/**/*.{tsx,jsx,vue,svelte,css,scss,html}` returned none).
 
 ## Backend Endpoint Inventory
-Resolved from `repo/src/app.ts` + `repo/src/routes/*.ts`.
+
+Resolved from `repo/src/app.ts` and route modules under `repo/src/routes/*.ts`.
 
 1. `GET /health`
-2. `GET /__test__/boom` (test-only branch)
-3. `POST /auth/register`
-4. `POST /auth/login`
-5. `POST /auth/refresh`
-6. `POST /auth/recover`
-7. `POST /auth/logout`
-8. `PATCH /auth/change-password`
-9. `GET /auth/me`
-10. `GET /auth/devices`
-11. `DELETE /auth/devices/:id`
-12. `GET /users`
-13. `GET /users/:id`
-14. `PATCH /users/:id`
-15. `DELETE /users/:id`
-16. `POST /users/:id/roles`
-17. `GET /roles`
-18. `POST /roles`
-19. `POST /roles/:id/permissions`
-20. `GET /permission-points`
-21. `POST /permission-points`
-22. `GET /menus`
-23. `POST /menus`
-24. `GET /resources`
-25. `POST /resources`
-26. `GET /resources/:id`
-27. `PATCH /resources/:id`
-28. `DELETE /resources/:id`
-29. `GET /resources/:id/hours`
-30. `POST /resources/:id/hours`
-31. `GET /resources/:id/closures`
-32. `POST /resources/:id/closures`
-33. `GET /travel-times`
-34. `POST /travel-times`
-35. `GET /itineraries`
-36. `POST /itineraries`
-37. `GET /itineraries/:id`
-38. `PATCH /itineraries/:id`
-39. `DELETE /itineraries/:id`
-40. `GET /itineraries/:id/items`
-41. `POST /itineraries/:id/items`
-42. `PATCH /itineraries/:id/items/:itemId`
-43. `DELETE /itineraries/:id/items/:itemId`
-44. `GET /itineraries/:id/optimize`
-45. `GET /itineraries/:id/versions`
-46. `POST /itineraries/:id/share`
-47. `GET /itineraries/:id/export`
-48. `GET /shared/:token`
-49. `GET /import/templates/:entityType`
-50. `POST /import/upload`
-51. `POST /import/:batchId/commit`
-52. `POST /import/:batchId/rollback`
-53. `GET /import/:batchId`
-54. `GET /models`
-55. `POST /models`
-56. `GET /models/:id`
-57. `PATCH /models/:id`
-58. `POST /models/:id/ab-allocations`
-59. `POST /models/:id/infer`
-60. `GET /notifications`
-61. `PATCH /notifications/:id/read`
-62. `GET /notifications/stats`
-63. `POST /notifications`
-64. `GET /notification-templates`
-65. `POST /notification-templates`
-66. `PATCH /notification-templates/:id`
-67. `GET /audit-logs`
-68. `GET /audit-logs/export`
+2. `GET /__test__/boom` (test-only when `NODE_ENV=test`)
+3. `GET /api/docs` (Swagger mount)
+4. `GET /api/docs/*` (Swagger assets, e.g., init JS)
+5. `POST /auth/register`
+6. `POST /auth/login`
+7. `POST /auth/refresh`
+8. `POST /auth/recover`
+9. `POST /auth/logout`
+10. `PATCH /auth/change-password`
+11. `GET /auth/me`
+12. `GET /auth/devices`
+13. `DELETE /auth/devices/:id`
+14. `GET /users`
+15. `GET /users/:id`
+16. `PATCH /users/:id`
+17. `DELETE /users/:id`
+18. `POST /users/:id/roles`
+19. `GET /roles`
+20. `POST /roles`
+21. `POST /roles/:id/permissions`
+22. `GET /permission-points`
+23. `POST /permission-points`
+24. `GET /menus`
+25. `POST /menus`
+26. `GET /resources`
+27. `POST /resources`
+28. `GET /resources/:id`
+29. `PATCH /resources/:id`
+30. `DELETE /resources/:id`
+31. `GET /resources/:id/hours`
+32. `POST /resources/:id/hours`
+33. `GET /resources/:id/closures`
+34. `POST /resources/:id/closures`
+35. `GET /travel-times`
+36. `POST /travel-times`
+37. `GET /itineraries`
+38. `POST /itineraries`
+39. `GET /itineraries/:id`
+40. `PATCH /itineraries/:id`
+41. `DELETE /itineraries/:id`
+42. `GET /itineraries/:id/items`
+43. `POST /itineraries/:id/items`
+44. `PATCH /itineraries/:id/items/:itemId`
+45. `DELETE /itineraries/:id/items/:itemId`
+46. `GET /itineraries/:id/optimize`
+47. `GET /itineraries/:id/versions`
+48. `POST /itineraries/:id/share`
+49. `GET /itineraries/:id/export`
+50. `GET /shared/:token`
+51. `GET /import/templates/:entityType`
+52. `POST /import/upload`
+53. `POST /import/:batchId/commit`
+54. `POST /import/:batchId/rollback`
+55. `GET /import/:batchId`
+56. `GET /models`
+57. `POST /models`
+58. `GET /models/:id`
+59. `PATCH /models/:id`
+60. `POST /models/:id/ab-allocations`
+61. `POST /models/:id/infer`
+62. `GET /notifications`
+63. `PATCH /notifications/:id/read`
+64. `GET /notifications/stats`
+65. `POST /notifications`
+66. `GET /notification-templates`
+67. `POST /notification-templates`
+68. `PATCH /notification-templates/:id`
+69. `GET /audit-logs`
+70. `GET /audit-logs/export`
 
 ## API Test Mapping Table
 
-| Endpoint | Covered | Test Type | Test files | Evidence |
+All entries below are covered by HTTP-level tests via `supertest(request(app))` importing `repo/src/app.ts` directly (example evidence: `repo/API_tests/auth.api.spec.ts:1-4`).
+
+| Endpoint | Covered | Test type | Test files | Evidence |
 |---|---|---|---|---|
-| `GET /health` | yes | true no-mock HTTP | `API_tests/health.api.spec.ts` | `describe('Health endpoint')`, request in file lines 5-21 |
-| `GET /__test__/boom` | yes | true no-mock HTTP | `API_tests/envelope.api.spec.ts` | line 277 `.get('/__test__/boom')` |
-| `POST /auth/register` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/register')` line 39 |
-| `POST /auth/login` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/login')` line 74 |
-| `POST /auth/refresh` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/refresh')` line 128 |
-| `POST /auth/recover` | yes | true no-mock HTTP | `API_tests/auth_recover.api.spec.ts` | `describe('POST /auth/recover ...')` lines 62, 143, 200 |
-| `POST /auth/logout` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/logout')` line 141 |
-| `PATCH /auth/change-password` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('PATCH /auth/change-password')` line 227 |
-| `GET /auth/me` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('GET /auth/me')` line 199 |
-| `GET /auth/devices` | yes | true no-mock HTTP | `API_tests/device_and_challenge.api.spec.ts` | line 126 `.get('/auth/devices')` |
-| `DELETE /auth/devices/:id` | yes | true no-mock HTTP | `API_tests/device_and_challenge.api.spec.ts` | line 143 `.delete(`/auth/devices/${removeId}`)` |
-| `GET /users` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /users (admin-only)')` line 171 |
-| `GET /users/:id` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /users/:id')` line 194 |
-| `PATCH /users/:id` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | line 222 `.patch(`/users/${uid}`)` |
-| `DELETE /users/:id` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | line 258 `.delete(`/users/${uid}`)` |
-| `POST /users/:id/roles` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /users/:id/roles')` line 149 |
-| `GET /roles` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /roles')` line 104 |
-| `POST /roles` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /roles')` line 81 |
-| `POST /roles/:id/permissions` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /roles/:id/permissions')` line 136 |
-| `GET /permission-points` | **no** | unit-only / indirect | none found in API tests | route exists at `src/routes/rbac.routes.ts:22`; no `.get('/permission-points')` in `API_tests/*.ts` |
-| `POST /permission-points` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /permission-points')` line 114 |
-| `GET /menus` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /menus')` line 211 |
-| `POST /menus` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /menus')` line 221 |
-| `GET /resources` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('GET /resources')` line 115 |
-| `POST /resources` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /resources')` line 93 |
-| `GET /resources/:id` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('GET /resources/:id')` line 126 |
-| `PATCH /resources/:id` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('PATCH /resources/:id')` line 137 |
-| `DELETE /resources/:id` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('DELETE /resources/:id')` line 263 |
-| `GET /resources/:id/hours` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('GET /resources/:id/hours')` line 206 |
-| `POST /resources/:id/hours` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /resources/:id/hours')` line 190 |
-| `GET /resources/:id/closures` | **no** | unit-only / indirect | none found in API tests | route exists at `src/routes/resources.routes.ts:38`; only POST closures tested |
-| `POST /resources/:id/closures` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /resources/:id/closures')` line 217 |
-| `GET /travel-times` | **no** | unit-only / indirect | none found in API tests | route exists at `src/routes/resources.routes.ts:45`; only POST travel-times tested |
-| `POST /travel-times` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /travel-times')` line 231 |
-| `GET /itineraries` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries')` line 140 |
-| `POST /itineraries` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('POST /itineraries')` line 127 |
-| `GET /itineraries/:id` | yes | true no-mock HTTP | `API_tests/e2e_workflow.api.spec.ts` | step 7, lines 199-203 |
-| `PATCH /itineraries/:id` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | lines 254/295/332 |
-| `DELETE /itineraries/:id` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('DELETE /itineraries/:id')` line 530 |
-| `GET /itineraries/:id/items` | **no** | unit-only / indirect | none found in API tests | route exists at `src/routes/itineraries.routes.ts:39`; no `.get(.../items)` requests |
-| `POST /itineraries/:id/items` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('POST /itineraries/:id/items')` line 150 |
-| `PATCH /itineraries/:id/items/:itemId` | yes | true no-mock HTTP | `API_tests/itinerary_invariants.api.spec.ts` | line 362 patch item |
-| `DELETE /itineraries/:id/items/:itemId` | yes | true no-mock HTTP | `API_tests/itinerary_invariants.api.spec.ts` | line 419 delete item |
-| `GET /itineraries/:id/optimize` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries/:id/optimize')` line 374 |
-| `GET /itineraries/:id/versions` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries/:id/versions')` line 181 |
-| `POST /itineraries/:id/share` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('POST /itineraries/:id/share')` line 384 |
-| `GET /itineraries/:id/export` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries/:id/export')` line 404 |
-| `GET /shared/:token` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /shared/:token')` line 396 |
-| `GET /import/templates/:entityType` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('GET /import/templates/:entityType')` line 48 |
-| `POST /import/upload` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('POST /import/upload')` line 101 |
-| `POST /import/:batchId/commit` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('POST /import/:batchId/commit')` line 130 |
-| `POST /import/:batchId/rollback` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('POST /import/:batchId/rollback')` line 141 |
-| `GET /import/:batchId` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('GET /import/:batchId')` line 196 |
-| `GET /models` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('GET /models')` line 106 |
-| `POST /models` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('POST /models')` line 76 |
-| `GET /models/:id` | yes | true no-mock HTTP | `API_tests/models_decisioning.api.spec.ts` | lines 301-304 (unknown ID path) |
-| `PATCH /models/:id` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('PATCH /models/:id')` line 117 |
-| `POST /models/:id/ab-allocations` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('POST /models/:id/ab-allocations')` line 129 |
-| `POST /models/:id/infer` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('POST /models/:id/infer')` line 150 |
-| `GET /notifications` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('GET /notifications')` line 149 |
-| `PATCH /notifications/:id/read` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('PATCH /notifications/:id/read')` line 179 |
-| `GET /notifications/stats` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('GET /notifications/stats')` line 190 |
-| `POST /notifications` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('POST /notifications — send notification')` line 160 |
-| `GET /notification-templates` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('GET /notification-templates')` line 138 |
-| `POST /notification-templates` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('POST /notification-templates')` line 120 |
-| `PATCH /notification-templates/:id` | **no** | unit-only / indirect | none found in API tests | route exists at `src/routes/notifications.routes.ts:32`; no patch request in `API_tests/*.ts` |
-| `GET /audit-logs` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | `describe('GET /audit-logs')` line 69 |
-| `GET /audit-logs/export` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | `describe('GET /audit-logs/export')` line 91 |
+| `GET /health` | yes | true no-mock HTTP | `API_tests/health.api.spec.ts` | `describe('GET /health')` at `repo/API_tests/health.api.spec.ts:4` |
+| `GET /__test__/boom` | yes | true no-mock HTTP | `API_tests/envelope.api.spec.ts` | `it('500 INTERNAL_ERROR — synthetic /__test__/boom'...)` at `repo/API_tests/envelope.api.spec.ts:276` |
+| `GET /api/docs` | yes | true no-mock HTTP | `API_tests/uncovered_endpoints.api.spec.ts` | `describe('GET /api/docs — Swagger UI mount'...)` at `repo/API_tests/uncovered_endpoints.api.spec.ts:404` |
+| `GET /api/docs/*` | yes | true no-mock HTTP | `API_tests/uncovered_endpoints.api.spec.ts` | `GET /api/docs/swagger-ui-init.js` at `repo/API_tests/uncovered_endpoints.api.spec.ts:431` |
+| `POST /auth/register` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/register')` at `repo/API_tests/auth.api.spec.ts:39` |
+| `POST /auth/login` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/login')` at `repo/API_tests/auth.api.spec.ts:74` |
+| `POST /auth/refresh` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/refresh')` at `repo/API_tests/auth.api.spec.ts:166` |
+| `POST /auth/recover` | yes | true no-mock HTTP | `API_tests/auth_recover.api.spec.ts` | `describe('POST /auth/recover — validation')` at `repo/API_tests/auth_recover.api.spec.ts:62` |
+| `POST /auth/logout` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('POST /auth/logout')` at `repo/API_tests/auth.api.spec.ts:179` |
+| `PATCH /auth/change-password` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('PATCH /auth/change-password')` at `repo/API_tests/auth.api.spec.ts:265` |
+| `GET /auth/me` | yes | true no-mock HTTP | `API_tests/auth.api.spec.ts` | `describe('GET /auth/me')` at `repo/API_tests/auth.api.spec.ts:237` |
+| `GET /auth/devices` | yes | true no-mock HTTP | `API_tests/device_and_challenge.api.spec.ts` | request at `repo/API_tests/device_and_challenge.api.spec.ts:125-127` |
+| `DELETE /auth/devices/:id` | yes | true no-mock HTTP | `API_tests/device_and_challenge.api.spec.ts` | request at `repo/API_tests/device_and_challenge.api.spec.ts:142-145` |
+| `GET /users` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /users (admin-only)')` at `repo/API_tests/rbac.api.spec.ts:171` |
+| `GET /users/:id` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /users/:id')` at `repo/API_tests/rbac.api.spec.ts:194` |
+| `PATCH /users/:id` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | `it('user.update lands in audit_logs...')` at `repo/API_tests/audit.api.spec.ts:207` |
+| `DELETE /users/:id` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | `it('user.delete lands in audit_logs...')` at `repo/API_tests/audit.api.spec.ts:246` |
+| `POST /users/:id/roles` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /users/:id/roles')` at `repo/API_tests/rbac.api.spec.ts:149` |
+| `GET /roles` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /roles')` at `repo/API_tests/rbac.api.spec.ts:104` |
+| `POST /roles` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /roles')` at `repo/API_tests/rbac.api.spec.ts:81` |
+| `POST /roles/:id/permissions` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /roles/:id/permissions')` at `repo/API_tests/rbac.api.spec.ts:136` |
+| `GET /permission-points` | yes | true no-mock HTTP | `API_tests/uncovered_endpoints.api.spec.ts` | `describe('GET /permission-points')` at `repo/API_tests/uncovered_endpoints.api.spec.ts:181` |
+| `POST /permission-points` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /permission-points')` at `repo/API_tests/rbac.api.spec.ts:114` |
+| `GET /menus` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('GET /menus')` at `repo/API_tests/rbac.api.spec.ts:211` |
+| `POST /menus` | yes | true no-mock HTTP | `API_tests/rbac.api.spec.ts` | `describe('POST /menus')` at `repo/API_tests/rbac.api.spec.ts:221` |
+| `GET /resources` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('GET /resources')` at `repo/API_tests/resources.api.spec.ts:115` |
+| `POST /resources` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /resources')` at `repo/API_tests/resources.api.spec.ts:93` |
+| `GET /resources/:id` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('GET /resources/:id')` at `repo/API_tests/resources.api.spec.ts:126` |
+| `PATCH /resources/:id` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('PATCH /resources/:id')` at `repo/API_tests/resources.api.spec.ts:137` |
+| `DELETE /resources/:id` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('DELETE /resources/:id')` at `repo/API_tests/resources.api.spec.ts:263` |
+| `GET /resources/:id/hours` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('GET /resources/:id/hours')` at `repo/API_tests/resources.api.spec.ts:206` |
+| `POST /resources/:id/hours` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /resources/:id/hours')` at `repo/API_tests/resources.api.spec.ts:190` |
+| `GET /resources/:id/closures` | yes | true no-mock HTTP | `API_tests/uncovered_endpoints.api.spec.ts` | `describe('GET /resources/:id/closures')` at `repo/API_tests/uncovered_endpoints.api.spec.ts:218` |
+| `POST /resources/:id/closures` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /resources/:id/closures')` at `repo/API_tests/resources.api.spec.ts:217` |
+| `GET /travel-times` | yes | true no-mock HTTP | `API_tests/uncovered_endpoints.api.spec.ts` | `describe('GET /travel-times — authenticated list')` at `repo/API_tests/uncovered_endpoints.api.spec.ts:458` |
+| `POST /travel-times` | yes | true no-mock HTTP | `API_tests/resources.api.spec.ts` | `describe('POST /travel-times')` at `repo/API_tests/resources.api.spec.ts:231` |
+| `GET /itineraries` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries')` at `repo/API_tests/itineraries.api.spec.ts:140` |
+| `POST /itineraries` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('POST /itineraries')` at `repo/API_tests/itineraries.api.spec.ts:127` |
+| `GET /itineraries/:id` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | cross-user read check at `repo/API_tests/itineraries.api.spec.ts:431-435` |
+| `PATCH /itineraries/:id` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | patch tests at `repo/API_tests/itineraries.api.spec.ts:246` and `:294` |
+| `DELETE /itineraries/:id` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('DELETE /itineraries/:id')` at `repo/API_tests/itineraries.api.spec.ts:530` |
+| `GET /itineraries/:id/items` | yes | true no-mock HTTP | `API_tests/uncovered_endpoints.api.spec.ts` | `describe('GET /itineraries/:id/items')` at `repo/API_tests/uncovered_endpoints.api.spec.ts:253` |
+| `POST /itineraries/:id/items` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('POST /itineraries/:id/items')` at `repo/API_tests/itineraries.api.spec.ts:150` |
+| `PATCH /itineraries/:id/items/:itemId` | yes | true no-mock HTTP | `API_tests/itinerary_invariants.api.spec.ts` | request at `repo/API_tests/itinerary_invariants.api.spec.ts:362` |
+| `DELETE /itineraries/:id/items/:itemId` | yes | true no-mock HTTP | `API_tests/itinerary_invariants.api.spec.ts` | request at `repo/API_tests/itinerary_invariants.api.spec.ts:419` |
+| `GET /itineraries/:id/optimize` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries/:id/optimize')` at `repo/API_tests/itineraries.api.spec.ts:374` |
+| `GET /itineraries/:id/versions` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries/:id/versions')` at `repo/API_tests/itineraries.api.spec.ts:181` |
+| `POST /itineraries/:id/share` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('POST /itineraries/:id/share')` at `repo/API_tests/itineraries.api.spec.ts:384` |
+| `GET /itineraries/:id/export` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /itineraries/:id/export')` at `repo/API_tests/itineraries.api.spec.ts:404` |
+| `GET /shared/:token` | yes | true no-mock HTTP | `API_tests/itineraries.api.spec.ts` | `describe('GET /shared/:token')` at `repo/API_tests/itineraries.api.spec.ts:396` |
+| `GET /import/templates/:entityType` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('GET /import/templates/:entityType')` at `repo/API_tests/import.api.spec.ts:48` |
+| `POST /import/upload` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('POST /import/upload')` at `repo/API_tests/import.api.spec.ts:101` |
+| `POST /import/:batchId/commit` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('POST /import/:batchId/commit')` at `repo/API_tests/import.api.spec.ts:130` |
+| `POST /import/:batchId/rollback` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('POST /import/:batchId/rollback')` at `repo/API_tests/import.api.spec.ts:141` |
+| `GET /import/:batchId` | yes | true no-mock HTTP | `API_tests/import.api.spec.ts` | `describe('GET /import/:batchId')` at `repo/API_tests/import.api.spec.ts:196` |
+| `GET /models` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('GET /models')` at `repo/API_tests/models.api.spec.ts:106` |
+| `POST /models` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('POST /models')` at `repo/API_tests/models.api.spec.ts:76` |
+| `GET /models/:id` | yes | true no-mock HTTP | `API_tests/models_decisioning.api.spec.ts` | unknown-id read at `repo/API_tests/models_decisioning.api.spec.ts:301-304` |
+| `PATCH /models/:id` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('PATCH /models/:id')` at `repo/API_tests/models.api.spec.ts:117` |
+| `POST /models/:id/ab-allocations` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('POST /models/:id/ab-allocations')` at `repo/API_tests/models.api.spec.ts:129` |
+| `POST /models/:id/infer` | yes | true no-mock HTTP | `API_tests/models.api.spec.ts` | `describe('POST /models/:id/infer')` at `repo/API_tests/models.api.spec.ts:150` |
+| `GET /notifications` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('GET /notifications')` at `repo/API_tests/notifications.api.spec.ts:149` |
+| `PATCH /notifications/:id/read` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('PATCH /notifications/:id/read')` at `repo/API_tests/notifications.api.spec.ts:179` |
+| `GET /notifications/stats` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('GET /notifications/stats')` at `repo/API_tests/notifications.api.spec.ts:190` |
+| `POST /notifications` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('POST /notifications — send notification')` at `repo/API_tests/notifications.api.spec.ts:160` |
+| `GET /notification-templates` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('GET /notification-templates')` at `repo/API_tests/notifications.api.spec.ts:138` |
+| `POST /notification-templates` | yes | true no-mock HTTP | `API_tests/notifications.api.spec.ts` | `describe('POST /notification-templates')` at `repo/API_tests/notifications.api.spec.ts:120` |
+| `PATCH /notification-templates/:id` | yes | true no-mock HTTP | `API_tests/uncovered_endpoints.api.spec.ts` | `describe('PATCH /notification-templates/:id')` at `repo/API_tests/uncovered_endpoints.api.spec.ts:331` |
+| `GET /audit-logs` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | `describe('GET /audit-logs')` at `repo/API_tests/audit.api.spec.ts:69` |
+| `GET /audit-logs/export` | yes | true no-mock HTTP | `API_tests/audit.api.spec.ts` | `describe('GET /audit-logs/export')` at `repo/API_tests/audit.api.spec.ts:91` |
 
 ## API Test Classification
 
 ### 1) True No-Mock HTTP
-- All suites under `repo/API_tests/*.spec.ts` use `supertest` + `app` with real route stack and no `jest.mock/vi.mock/sinon.stub` in API test files.
-- Representative evidence: `API_tests/auth.api.spec.ts:1-4`, `API_tests/resources.api.spec.ts:1-4`, `API_tests/e2e_workflow.api.spec.ts:17-20`.
+- Present across all files in `repo/API_tests/*.spec.ts`.
+- Evidence: direct `supertest` + `app` import (`repo/API_tests/auth.api.spec.ts:1-4`, `repo/API_tests/rbac.api.spec.ts:1-4`, `repo/API_tests/import.api.spec.ts:1-4`) and real Prisma connectivity/cleanup (`beforeAll/afterAll` with `prisma.$connect/$disconnect`, e.g., `repo/API_tests/auth.api.spec.ts:22-37`).
+- Count: 29/29 API test files.
 
 ### 2) HTTP with Mocking
-- `repo/unit_tests/import_routes.spec.ts`: mocks auth middleware (`jest.mock('../src/middleware/auth.middleware', ...)` at line 10) and runs HTTP requests against mounted router.
-- `repo/unit_tests/targeted_branches.spec.ts`: `jest.doMock(...)` for auth/schema modules (lines 192-201) then HTTP requests to import routes (lines 211-214).
-- Unit project also remaps Prisma to mocks globally (`repo/jest.config.js:73-75`), so unit-suite HTTP calls are not true no-mock API tests.
+- None found in `repo/API_tests` (no `jest.mock`, `vi.mock`, `sinon.stub` matches).
 
 ### 3) Non-HTTP (unit/integration without HTTP)
-- Most unit files (e.g., `unit_tests/auth_service_full.spec.ts`, `unit_tests/resource_service.spec.ts`, `unit_tests/rbac_service.spec.ts`, `unit_tests/model_service_full.spec.ts`) directly test services/controllers/middleware in-process with spies/mocks.
+- Not applicable inside `repo/API_tests`; this category exists in `repo/unit_tests` only.
 
-## Mock Detection (Required)
-- `jest.mock('child_process'...)` in `repo/unit_tests/model_adapters.spec.ts:21`.
-- `jest.mock('fs'...)` in `repo/unit_tests/model_adapters.spec.ts:42`.
-- `jest.mock('../src/middleware/auth.middleware'...)` in `repo/unit_tests/import_routes.spec.ts:10`.
-- `jest.mock('node-cron'...)` in `repo/unit_tests/scheduler.spec.ts:15`.
-- `jest.mock('../src/services/notification.service'...)` in `repo/unit_tests/scheduler.spec.ts:25`.
-- Dependency remapping to Prisma mocks in Jest config: `repo/jest.config.js:73-75`.
+## Mock Detection (Strict)
+
+### API suite
+- No mock/stub usage detected in `repo/API_tests`.
+
+### Non-API tests (informational, affects sufficiency interpretation)
+- Prisma is mocked in unit project via Jest module mapping: `repo/jest.config.js:72-75` (`../models/prisma` -> `src/__mocks__/prisma.ts`).
+- Route-level HTTP with mocking exists in `repo/unit_tests/import_routes.spec.ts:10` (`jest.mock('../src/middleware/auth.middleware', ...)`) while using supertest.
+- Service/controller unit tests heavily rely on spies/mocks, e.g. `repo/unit_tests/controllers.spec.ts:64-66`, `repo/unit_tests/model_adapters.spec.ts:21`, `repo/unit_tests/model_adapters.spec.ts:42`.
 
 ## Coverage Summary
-- Total endpoints: **68**
-- Endpoints with HTTP tests (any): **63**
-- Endpoints with true no-mock HTTP tests: **63**
-- HTTP coverage: **92.65%** (`63/68`)
-- True API coverage: **92.65%** (`63/68`)
+- Total endpoints inventoried: **70**
+- Endpoints with HTTP tests: **70**
+- Endpoints with true no-mock HTTP tests: **70**
+- HTTP coverage: **100.0%**
+- True API coverage: **100.0%**
 
-Uncovered endpoints (5):
-- `GET /permission-points`
-- `GET /resources/:id/closures`
-- `GET /travel-times`
-- `GET /itineraries/:id/items`
-- `PATCH /notification-templates/:id`
-
-## Unit Test Summary
+## Unit Test Analysis
 
 ### Backend Unit Tests
-- Unit test files present: **37** under `repo/unit_tests/`.
-- Controllers covered: broad controller delegation and branch coverage in `unit_tests/controllers.spec.ts` and `unit_tests/users_controller.spec.ts`.
-- Services covered: auth/import/itinerary/model/notification/rbac/resource/routing/scheduler/audit via `*_service*.spec.ts` files.
-- Middleware covered: auth/idempotency/validate in `unit_tests/auth_middleware.spec.ts`, `unit_tests/idempotency.spec.ts`, `unit_tests/validate_middleware.spec.ts`.
-- Repositories: no explicit repository layer in `src/`; data access is Prisma in services/controllers.
+- Test files: present extensively under `repo/unit_tests/*.spec.ts`.
+- Controllers covered: broad handler coverage in `repo/unit_tests/controllers.spec.ts` and targeted users coverage in `repo/unit_tests/users_controller.spec.ts`.
+- Services covered: `auth`, `model`, `itinerary`, `import`, `resource`, `notification`, `rbac`, `audit`, `routing`, `scheduler` (examples: `repo/unit_tests/auth_service_full.spec.ts`, `repo/unit_tests/model_service_full.spec.ts`, `repo/unit_tests/itinerary_service_full.spec.ts`, `repo/unit_tests/routing.spec.ts`).
+- Middleware covered: `auth`, `validate`, `idempotency` (`repo/unit_tests/auth_middleware.spec.ts`, `repo/unit_tests/validate_middleware.spec.ts`, `repo/unit_tests/idempotency.spec.ts`).
+- Repository layer: no dedicated repository abstraction appears in source layout (Prisma calls are service-level).
 
-Important backend modules not sufficiently unit-tested (from static evidence):
-- Direct dedicated unit test for `src/routes/notifications.routes.ts` path `PATCH /notification-templates/:id` is absent; coverage relies on higher-level API tests, which are also missing this endpoint.
-- Explicit isolated test for `src/routes/rbac.routes.ts` `GET /permission-points` is absent.
-- Explicit isolated test for `src/routes/resources.routes.ts` `GET /travel-times` and `GET /resources/:id/closures` is absent.
-- Explicit isolated test for `src/routes/itineraries.routes.ts` `GET /itineraries/:id/items` is absent.
+Important backend modules NOT directly unit-tested in isolation (dedicated file-level specs absent):
+- `repo/src/config/swagger.ts`
+- `repo/src/config/database.ts` (only indirectly hit)
+- `repo/src/middleware/audit.middleware.ts` (primarily API-tested)
+- `repo/src/routes/*.ts` except targeted import routes (`repo/unit_tests/import_routes.spec.ts`)
 
 ### Frontend Unit Tests
 - Frontend test files: **NONE**
-- Frameworks/tools detected for frontend tests: **NONE**
+- Frameworks/tools detected for frontend testing: **NONE**
 - Frontend components/modules covered: **NONE**
-- Important frontend components/modules not tested: **N/A (no frontend layer detected in repo)**
+- Important frontend components/modules not tested: **N/A (no frontend code detected)**
+
+Mandatory verdict:
 - **Frontend unit tests: MISSING**
 
-Strict failure rule applicability:
-- Project inferred as **backend**, not `fullstack`/`web`; therefore frontend-missing is **not** flagged as a CRITICAL GAP under the provided strict rule.
+Interpretation in strict context:
+- Project type is `backend` (not `fullstack`/`web`), so this is **not** a CRITICAL GAP under the provided frontend strict-failure rule.
 
 ### Cross-Layer Observation
-- No frontend codebase detected; balance analysis across FE/BE is not applicable.
+- Backend-only codebase; frontend/backend balance analysis is not applicable.
 
 ## API Observability Check
-- Strong/clear in most API suites: method/path explicit in describe blocks, request input shown via `.send/.field/.query`, and response assertions check status + body structure/codes (`API_tests/auth_recover.api.spec.ts`, `API_tests/import.api.spec.ts`, `API_tests/models_decisioning.api.spec.ts`).
-- Weak spots: some checks assert mainly status/latency without deep response payload verification (`API_tests/performance.api.spec.ts`, parts of `API_tests/production_boot.api.spec.ts`).
+- Strong overall: tests generally include explicit method/path, request payload/headers, and response assertions.
+- Evidence examples:
+  - Endpoint + input + output: `repo/API_tests/import.api.spec.ts:101-113`, `repo/API_tests/import.api.spec.ts:130-138`.
+  - Error envelope shape and request correlation: `repo/API_tests/auth_recover.api.spec.ts:63-76`, `repo/API_tests/envelope.api.spec.ts:276-309`.
+  - Auth/RBAC behavior visibility: `repo/API_tests/rbac.api.spec.ts:171-191`, `repo/API_tests/uncovered_endpoints.api.spec.ts:331-399`.
+- Weak spots: a minority of assertions are status-only in some edge tests; not dominant.
 
-## Tests Check
-- Success paths: strong coverage across auth/resources/itineraries/import/models/notifications/audit.
-- Failure/edge coverage: strong (validation errors, auth failures, lockout/rate-limit, idempotency conflicts, rollback windows, model runtime paths).
-- Auth/permissions: strong route-level negative matrix (`API_tests/permission_matrix.api.spec.ts`).
-- Integration boundaries: good API-layer coverage; true end-to-end through real HTTP + DB in API suite.
-- `run_tests.sh` check: Docker-based orchestration (`docker compose ...`) and in-container Jest runs; no host package-manager dependency required for test execution path.
+## Test Quality & Sufficiency
+- Success paths: broad coverage across auth, RBAC, resources, itineraries, import, models, notifications, audit.
+- Failure paths: strong coverage (401/403/404/409/429/500 and validation envelopes).
+- Edge cases: present (rate limits/challenge flow, lockout, idempotency, invariants, audit immutability).
+- Validation depth: strong, especially import and schema validation branches.
+- Auth/permissions: strong matrix testing via `repo/API_tests/permission_matrix.api.spec.ts` and `repo/API_tests/rbac_data_scope.api.spec.ts`.
+- Integration boundaries: strong API-level execution with DB side effects and read-back assertions.
+
+`run_tests.sh` check:
+- Docker-based and containerized test execution confirmed (`repo/run_tests.sh:109`, `repo/run_tests.sh:154`, `repo/run_tests.sh:161`, `repo/run_tests.sh:178`).
+- No host-side dependency install required in script flow.
 
 ## End-to-End Expectations
-- For inferred **backend** project: E2E-style backend journey is present (`API_tests/e2e_workflow.api.spec.ts`).
-- Fullstack FE↔BE E2E expectation is not applicable because no frontend layer was detected.
+- Project type is backend; fullstack FE↔BE E2E expectation is not applicable.
+- Backend API E2E behavior is heavily represented (`repo/API_tests/e2e_workflow.api.spec.ts`, `repo/API_tests/runtime_boundary_e2e.api.spec.ts`).
+
+## Tests Check
+- Endpoint inventory completeness: pass.
+- HTTP mapping completeness: pass.
+- Mocking contamination in API suite: none detected.
+- Unit suite breadth: high, but mock-heavy by design.
 
 ## Test Coverage Score (0–100)
-**84/100**
+- **93/100**
 
 ## Score Rationale
-- High score drivers: large real HTTP suite with broad success/failure/edge/security coverage, strong negative auth/RBAC cases, strong envelope/assertion quality in many files.
-- Deductions: 5 production endpoints lack direct HTTP coverage; a few observability/perf tests are shallow; unit-suite HTTP tests include mocks (acceptable for unit scope, but not true API coverage).
+- + Full endpoint-level HTTP coverage with no API-layer mocking.
+- + Strong negative/edge-path testing and canonical envelope checks.
+- + Dockerized deterministic test runner.
+- - Unit tests are heavily mocked (expected, but limits realism at unit layer).
+- - Some route/config modules rely mainly on indirect/API coverage, not focused unit specs.
 
 ## Key Gaps
-1. Missing direct tests for 5 endpoints (listed above) reduce deterministic route coverage.
-2. No route-level API test for `PATCH /notification-templates/:id` despite sensitive admin behavior.
-3. Some tests emphasize status over full payload/contract assertions.
+- No dedicated isolated unit tests for certain config/middleware modules (`swagger`, `database`, `audit.middleware`).
+- Some tests use status-dominant assertions instead of deeper payload/property invariants.
 
 ## Confidence & Assumptions
-- Confidence: **High** for endpoint inventory and coverage mapping (routes statically enumerated from `src/app.ts` + `src/routes/*.ts`).
-- Assumption: third-party `swagger-ui-express` internal methods under `/api/docs` are excluded because methods are not explicitly declared in project route code.
+- Confidence: **high** for endpoint inventory and HTTP coverage mapping.
+- Assumption: static route definitions in `repo/src/routes/*.ts` are authoritative and no runtime-generated routes add hidden endpoints.
+- Assumption: conditional `GET /__test__/boom` is treated as endpoint because it exists in code for test runtime.
 
 ---
 
 # README Audit
 
-## README Location Check
-- `repo/README.md` exists.
+## README Location
+- Found at required path: `repo/README.md`.
 
-## Hard Gate Results
+## Hard Gate Evaluation
 
 ### Formatting
-- PASS: markdown structure is readable and organized (`repo/README.md` headings/tables/code blocks throughout).
+- Pass: structured markdown with headings/tables/code fences (`repo/README.md`).
 
-### Startup Instructions (Backend/Fullstack requirement)
-- **FAIL (strict)**: required literal `docker-compose up` is missing.
-- Found: `docker compose up -d --build` (`repo/README.md:48`, `repo/README.md:111`), plus single-container `docker build`/`docker run` path.
+### Startup Instructions
+- Pass for backend: includes required `docker-compose up` command (`repo/README.md:14`).
 
 ### Access Method
-- PASS: URLs/ports are provided (`repo/README.md:143-151`).
+- Pass: URL + ports documented (`repo/README.md:25`, `repo/README.md:172-179`).
 
 ### Verification Method
-- PASS: verification via `curl /health` and smoke commands is provided (`repo/README.md:82-93`).
+- Pass: explicit health curl and test commands (`repo/README.md:58`, `repo/README.md:111-134`).
 
-### Environment Rules (Docker-contained only; no runtime installs)
-- **FAIL**: README explicitly instructs runtime package install: `pip install onnxruntime` (`repo/README.md:296`).
+### Environment Rules (Docker-contained)
+- Pass: README explicitly states Docker-contained dependencies and no host package-manager setup (`repo/README.md:17`, `repo/README.md:126-131`).
+- No disallowed host install instructions (`npm install`, `pip install`, `apt-get`, manual DB setup) found.
 
 ### Demo Credentials (auth exists)
-- Auth clearly exists (`/auth/*` routes in `src/routes/auth.routes.ts`).
-- README provides usernames/passwords (`repo/README.md:152-158`) but does not explicitly map credentials to **all roles** in a role-complete matrix.
-- **FAIL (strict interpretation of “ALL roles”)**.
+- Pass: credentials with roles provided (`repo/README.md:29-33`).
 
 ## Engineering Quality
-- Tech stack clarity: good (Express/Prisma/MySQL/Docker/test commands are documented).
-- Architecture/behavior explanation: strong and detailed (error envelope, idempotency, versioning, model modes, logging categories).
-- Testing instructions: strong (`run_tests.sh`, compose-based commands).
-- Security/roles/workflows: well-documented but overloaded; document is long and mixes operator/runtime details with acceptance quick start.
+- Tech stack clarity: strong (Express/Prisma/MariaDB/model adapters documented).
+- Architecture and behavior depth: strong (error envelope, idempotency, versioning, immutability, model runtime constraints).
+- Testing instructions: strong and Docker-first (`repo/README.md:124-145`, `repo/README.md:439-459`).
+- Security/roles: clear and explicit (secret requirements, auth rules, role examples).
 
 ## High Priority Issues
-1. Missing required top-level project type declaration (`backend/fullstack/web/android/ios/desktop`) at README start.
-2. Missing strict-required `docker-compose up` command string for backend/fullstack startup gate.
-3. Runtime install command (`pip install onnxruntime`) violates strict Docker-contained environment rule.
-4. Demo credentials section does not explicitly enumerate credentials per all roles.
+- None.
 
 ## Medium Priority Issues
-1. README is very long and blends operational hardening details with quick-start flow, reducing auditability for first-time reviewers.
-2. Multiple startup modes (single-container vs compose) are not summarized with clear "acceptance path vs optional path" gate table.
+- Credential documentation is duplicated (`repo/README.md:29-33` and `repo/README.md:181-187`); second table omits explicit role column, which can create drift/confusion.
 
 ## Low Priority Issues
-1. Some sections are highly detailed but repetitive (security caveats and migration notes repeated across sections).
+- README is long and partly repetitive; some sections can be consolidated for maintainability.
 
 ## Hard Gate Failures
-1. Startup instructions gate (missing required `docker-compose up` literal).
-2. Environment rules gate (runtime `pip install` instruction present).
-3. Demo credentials gate (strict all-roles requirement not explicitly met).
+- None.
 
 ## README Verdict
-**FAIL**
+- **PASS**
+
+---
 
 ## Final Verdicts
-- Test Coverage Audit Verdict: **PARTIAL PASS** (strong overall, but 5 uncovered endpoints).
-- README Audit Verdict: **FAIL** (hard-gate violations).
+- Test Coverage Audit: **PASS (strong)**
+- README Audit: **PASS**
