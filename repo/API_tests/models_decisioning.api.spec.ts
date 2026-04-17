@@ -100,7 +100,13 @@ describe('POST /models — validation and registry invariants', () => {
       .send({ name: `bad-semver-${ts}`, version: 'v1', type: 'custom' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
-    expect(res.body.message).toMatch(/semver/i);
+    // The top-level message is the generic envelope string; the per-field
+    // hint ("Must be semantic version …") lives in details[].message.
+    const versionErr = (res.body.details ?? []).find(
+      (d: { field: string; message: string }) => d.field === 'version',
+    );
+    expect(versionErr).toBeDefined();
+    expect(versionErr.message).toMatch(/semver|semantic version/i);
   });
 
   it('400 — unknown type is rejected', async () => {

@@ -259,8 +259,10 @@ describe('POST /models/:id/infer — Custom adapter SUCCEEDS over a real subproc
       'import json,sys',
       'payload = json.loads(sys.stdin.read() or "{}")',
       // Echo input length as a deterministic derived prediction so the test
-      // can assert the STDIN pipe wired up correctly.
-      'pred = len(json.dumps(payload))',
+      // can assert the STDIN pipe wired up correctly. Use compact
+      // separators to match Node's JSON.stringify (which has no spaces)
+      // so the length check is deterministic across runtimes.
+      'pred = len(json.dumps(payload, separators=(",", ":")))',
       'print(json.dumps({"prediction": pred, "confidence": 0.75, "topFeatures": [{"feature": "echo", "contribution": 1.0}]}))',
     ].join(';');
 

@@ -50,6 +50,36 @@ beforeAll(async () => {
   }
   await prisma.user.update({ where: { id: adminId }, data: { role: 'admin' } });
 
+  // Seed organizer permission points + role bindings so userA/userB tokens
+  // can hit /itineraries. Default registered-user role has NO permission
+  // points so every protected write returns 403 before reaching controllers.
+  const perms = [
+    'itinerary:read', 'itinerary:write', 'itinerary:delete', 'resource:read',
+  ];
+  const ppIds: string[] = [];
+  for (const code of perms) {
+    const pp = await prisma.permissionPoint.upsert({
+      where: { code }, update: {}, create: { code },
+    });
+    ppIds.push(pp.id);
+  }
+  const orgRole = await prisma.role.upsert({
+    where: { name: 'organizer' },
+    update: {},
+    create: { name: 'organizer', description: 'Organizer role' },
+  });
+  await prisma.rolePermissionPoint.deleteMany({ where: { roleId: orgRole.id } });
+  await prisma.rolePermissionPoint.createMany({
+    data: ppIds.map((ppId) => ({ roleId: orgRole.id, permissionPointId: ppId })),
+  });
+  for (const uid of [userAId, userBId]) {
+    await prisma.userRole.upsert({
+      where: { userId_roleId: { userId: uid, roleId: orgRole.id } },
+      update: {},
+      create: { userId: uid, roleId: orgRole.id },
+    });
+  }
+
   tokenA = (await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send(userAc)).body.accessToken;
   tokenB = (await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send(userBc)).body.accessToken;
   adminToken = (await request(app).post('/auth/login').set('Idempotency-Key', uuid()).send(adminC)).body.accessToken;
@@ -276,16 +306,26 @@ describe('Sensitive token redaction — idempotency cache + audit CSV export', (
     const issuedAccess: string = first.body.accessToken;
     expect(issuedAccess).toBeDefined();
 
-    // The stored responseBody._body must have both token fields redacted.
-    const row = await prisma.idempotencyKey.findUnique({ where: { key } });
-    expect(row).not.toBeNull();
-    const body = (row!.responseBody as any)?._body ?? {};
+    // The stored responseBody._body update is fire-and-forget inside the
+    // middleware's res.json interceptor — the HTTP response may return
+    // before that write lands. Poll until the cached body carries the
+    // redacted token fields OR the 2s budget expires.
+    let body: any = {};
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      const row = await prisma.idempotencyKey.findUnique({ where: { key } });
+      expect(row).not.toBeNull();
+      body = (row!.responseBody as any)?._body ?? {};
+      if (body.accessToken === '[REDACTED]') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     expect(body.accessToken).toBe('[REDACTED]');
     expect(body.refreshToken).toBe('[REDACTED]');
     // But the non-sensitive fields are preserved so replays stay useful.
     expect(body.user?.username).toBe(userAc.username);
     // The stored snapshot NEVER contains the actual tokens in cleartext.
-    const asJson = JSON.stringify(row!.responseBody);
+    const finalRow = await prisma.idempotencyKey.findUnique({ where: { key } });
+    const asJson = JSON.stringify(finalRow!.responseBody);
     expect(asJson).not.toContain(issuedAccess);
   });
 

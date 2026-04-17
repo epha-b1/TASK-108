@@ -87,6 +87,38 @@ describe('E2E workflow — full user journey via HTTP only', () => {
     // no self-promotion endpoint, so this is the minimum out-of-band step
     // required to drive the admin-authenticated portions of the workflow.
     await prisma.user.update({ where: { id: adminUserId }, data: { role: 'admin' } });
+
+    // Seed organizer permission points + role bindings so owner/reader
+    // tokens carry itinerary/notification scopes. Without this, the default
+    // registered-user role has NO permission points and every write call
+    // returns 403 before reaching the controller.
+    const perms = [
+      'itinerary:read', 'itinerary:write', 'itinerary:delete',
+      'resource:read', 'notification:read',
+    ];
+    const ppIds: string[] = [];
+    for (const code of perms) {
+      const pp = await prisma.permissionPoint.upsert({
+        where: { code }, update: {}, create: { code },
+      });
+      ppIds.push(pp.id);
+    }
+    const orgRole = await prisma.role.upsert({
+      where: { name: 'organizer' },
+      update: {},
+      create: { name: 'organizer', description: 'Organizer role' },
+    });
+    await prisma.rolePermissionPoint.deleteMany({ where: { roleId: orgRole.id } });
+    await prisma.rolePermissionPoint.createMany({
+      data: ppIds.map((ppId) => ({ roleId: orgRole.id, permissionPointId: ppId })),
+    });
+    for (const uid of [ownerUserId, readerUserId]) {
+      await prisma.userRole.upsert({
+        where: { userId_roleId: { userId: uid, roleId: orgRole.id } },
+        update: {},
+        create: { userId: uid, roleId: orgRole.id },
+      });
+    }
   }, 30_000);
 
   it('step 2 — login returns signed tokens + user body for all three accounts', async () => {

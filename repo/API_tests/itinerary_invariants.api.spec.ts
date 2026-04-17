@@ -340,19 +340,17 @@ describe('Version history diff integrity for metadata + item edits/deletes', () 
     await prisma.itinerary.deleteMany({ where: { id: itinId } }).catch(() => {});
   });
 
+  type VersionRow = { versionNumber: number; snapshot: any; diffMetadata: any };
+
   async function getVersions() {
     const res = await request(app)
       .get(`/itineraries/${itinId}/versions`)
       .set('Authorization', `Bearer ${ownerToken}`);
     expect(res.status).toBe(200);
-    return res.body as Array<{
-      versionNumber: number;
-      snapshot: any;
-      diffMetadata: any;
-    }>;
+    return res.body as VersionRow[];
   }
 
-  function newest(versions: Array<{ versionNumber: number }>) {
+  function newest(versions: VersionRow[]): VersionRow {
     return [...versions].sort((a, b) => b.versionNumber - a.versionNumber)[0];
   }
 

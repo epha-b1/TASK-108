@@ -51,6 +51,37 @@ beforeAll(async () => {
     securityQuestions: [{ question: 'Q1?', answer: 'a1' }, { question: 'Q2?', answer: 'a2' }],
   });
   recipientUserId = rxReg.body.id;
+
+  // Seed notification:read on the recipient so GET /notifications returns
+  // 200 rather than 403 from empty-permissions default state.
+  const perms = ['notification:read'];
+  const ppIds: string[] = [];
+  for (const code of perms) {
+    const pp = await prisma.permissionPoint.upsert({
+      where: { code }, update: {}, create: { code },
+    });
+    ppIds.push(pp.id);
+  }
+  const orgRole = await prisma.role.upsert({
+    where: { name: 'organizer' },
+    update: {},
+    create: { name: 'organizer', description: 'Organizer role' },
+  });
+  // Union the permission points onto whatever the role already has —
+  // other test files in this suite also seed this role with different
+  // permission sets; we must not clobber theirs.
+  for (const permissionPointId of ppIds) {
+    await prisma.rolePermissionPoint.upsert({
+      where: { roleId_permissionPointId: { roleId: orgRole.id, permissionPointId } },
+      update: {},
+      create: { roleId: orgRole.id, permissionPointId },
+    });
+  }
+  await prisma.userRole.upsert({
+    where: { userId_roleId: { userId: recipientUserId, roleId: orgRole.id } },
+    update: {},
+    create: { userId: recipientUserId, roleId: orgRole.id },
+  });
 }, 20000);
 
 afterAll(async () => {

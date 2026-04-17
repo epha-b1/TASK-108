@@ -16,6 +16,7 @@ export const createTemplateSchema = z.object({
 });
 
 export const updateTemplateSchema = z.object({
+  code: z.string().min(1).optional(),
   subject: z.string().optional(),
   body: z.string().optional(),
 });

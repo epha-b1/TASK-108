@@ -155,6 +155,37 @@ describe('E2E over real TCP — containerised API process, no in-process app imp
     // endpoint in the service layer, so we use Prisma here. Every other
     // state transition goes through HTTP.
     await prisma.user.update({ where: { id: adminUserId }, data: { role: 'admin' } });
+
+    // Seed organizer permission points + role bindings so owner/reader
+    // tokens can hit itinerary/notification endpoints. Default registered
+    // state has NO permission points so every call would 403.
+    const perms = [
+      'itinerary:read', 'itinerary:write', 'itinerary:delete',
+      'resource:read', 'notification:read',
+    ];
+    const ppIds: string[] = [];
+    for (const code of perms) {
+      const pp = await prisma.permissionPoint.upsert({
+        where: { code }, update: {}, create: { code },
+      });
+      ppIds.push(pp.id);
+    }
+    const orgRole = await prisma.role.upsert({
+      where: { name: 'organizer' },
+      update: {},
+      create: { name: 'organizer', description: 'Organizer role' },
+    });
+    await prisma.rolePermissionPoint.deleteMany({ where: { roleId: orgRole.id } });
+    await prisma.rolePermissionPoint.createMany({
+      data: ppIds.map((ppId) => ({ roleId: orgRole.id, permissionPointId: ppId })),
+    });
+    for (const uid of [ownerUserId, readerUserId]) {
+      await prisma.userRole.upsert({
+        where: { userId_roleId: { userId: uid, roleId: orgRole.id } },
+        update: {},
+        create: { userId: uid, roleId: orgRole.id },
+      });
+    }
   }, 20_000);
 
   it('step 2 — login for all three', async () => {

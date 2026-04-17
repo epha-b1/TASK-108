@@ -189,7 +189,6 @@ describe('audit_logs — DB trigger immutability', () => {
     await seedAuditRow('resource.create');
     let rejection: unknown = null;
     try {
-      // @ts-expect-error prisma client does have updateMany at runtime.
       await prisma.auditLog.updateMany({
         where: { action: 'resource.create' },
         data: { action: 'rewrite_attempt' },
