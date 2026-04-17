@@ -141,7 +141,6 @@ describe('audit_logs — DB trigger immutability', () => {
 
   it('DELETE on an existing audit_logs row is rejected with SQLSTATE 45000', async () => {
     const rowId = await seedAuditRow('resource.create');
-    const beforeCount = await prisma.auditLog.count();
     let rejection: unknown = null;
     try {
       await prisma.$executeRawUnsafe(`DELETE FROM audit_logs WHERE id = ?`, rowId);
@@ -152,9 +151,10 @@ describe('audit_logs — DB trigger immutability', () => {
     const errStr = String((rejection as Error).message);
     expect(errStr).toMatch(/append-only|45000|DELETE is forbidden/i);
 
-    const afterCount = await prisma.auditLog.count();
-    expect(afterCount).toBe(beforeCount);
-    // And the specific row is still there.
+    // The per-row invariant is authoritative — the row we tried to delete
+    // is still there. A whole-table count is unreliable here because the
+    // audit() middleware from parallel running tests fires-and-forgets
+    // new rows between any two count() calls.
     const row = await prisma.auditLog.findUnique({ where: { id: rowId } });
     expect(row).not.toBeNull();
   });
